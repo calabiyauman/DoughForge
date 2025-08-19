@@ -49,33 +49,27 @@ export class AIShapeGenerator {
   private static async generateWithOpenAI(description: string): Promise<any> {
     const openai = this.getOpenAI()
 
-    const prompt = `Generate a cookie cutter outline for: "${description}"
+    const prompt = `Create a cookie cutter outline for: "${description}"
 
-Create a simple, clean silhouette suitable for a cookie cutter. The shape should be:
-- Recognizable and iconic 
-- Simple enough for cutting through dough
-- Closed path with no gaps
-- Centered around origin (0,0)
-- Sized between -30 to +30 units on both axes
-- Smooth curves and clear features
+REQUIREMENTS:
+- Simple, recognizable silhouette suitable for cutting dough
+- Closed path with NO gaps or holes
+- Centered at origin (0,0)
+- All coordinates between -30 and +30
+- 15-30 points for optimal detail
+- Clockwise path tracing outer edge
+- First point = last point (closed)
+- Smooth transitions between points
+- No internal details or thin features
 
-Return ONLY a JSON object with this exact structure:
-{
-  "points": [{"x": number, "y": number}, ...],
-  "reasoning": "Brief explanation of design choices",
-  "category": "animal|nature|object|food|holiday|abstract"
-}
-
-The points array should form a closed path that traces the outer edge of the shape clockwise.
-Start and end with the same point to close the shape.
-Use 15-30 points for good detail without being too complex.`
+RESPOND WITH ONLY THE JSON OBJECT - NO OTHER TEXT.`
 
     const response = await openai.chat.completions.create({
       model: "gpt-4-turbo-preview",
       messages: [
         {
           role: "system", 
-          content: "You are a skilled designer creating cookie cutter shapes. Generate precise coordinate points for clean, printable silhouettes."
+          content: "You are a skilled designer creating cookie cutter shapes. You MUST respond with ONLY a valid JSON object in this EXACT format:\n\n{\n  \"points\": [{\"x\": number, \"y\": number}, {\"x\": number, \"y\": number}, ...],\n  \"reasoning\": \"Brief explanation of design choices\",\n  \"category\": \"animal|nature|object|food|holiday|abstract|vehicle|character\"\n}\n\nRULES:\n- points: Array of 15-30 coordinate objects forming a closed path\n- Each point: {\"x\": number, \"y\": number} where numbers are between -30 and +30\n- First and last points MUST be identical to close the shape\n- Path traces clockwise around the outer edge\n- reasoning: 1-2 sentences explaining design decisions\n- category: Must be one of the listed options\n- NO additional text, explanations, or markdown - ONLY the JSON object"
         },
         {
           role: "user",
@@ -94,27 +88,69 @@ Use 15-30 points for good detail without being too complex.`
     // Parse the JSON response
     let aiData: AIShapeResponse
     try {
-      // Extract JSON from response (in case there's extra text)
-      const jsonMatch = content.match(/\{[\s\S]*\}/)
+      // Clean the response - remove any markdown, extra text, or formatting
+      let cleanContent = content.trim()
+      
+      // Remove markdown code blocks if present
+      cleanContent = cleanContent.replace(/```json\s*/g, '').replace(/```\s*/g, '')
+      
+      // Extract JSON object (find the first complete JSON object)
+      const jsonMatch = cleanContent.match(/\{[\s\S]*?\}(?=\s*$|$)/)
       if (!jsonMatch) {
-        throw new Error('No JSON found in response')
+        throw new Error('No valid JSON object found in response')
       }
+      
+      // Parse the JSON
       aiData = JSON.parse(jsonMatch[0])
+      
+      // Validate required fields exist
+      if (!aiData.points || !aiData.reasoning || !aiData.category) {
+        throw new Error('Missing required fields in JSON response')
+      }
+      
     } catch (parseError) {
       console.error('Failed to parse OpenAI response:', content)
-      throw new Error('Invalid JSON response from OpenAI')
+      console.error('Parse error:', parseError)
+      throw new Error(`Invalid JSON response from OpenAI: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`)
     }
 
     // Validate the response structure
     if (!aiData.points || !Array.isArray(aiData.points) || aiData.points.length < 3) {
-      throw new Error('Invalid points array in OpenAI response')
+      throw new Error(`Invalid points array: expected 3+ points, got ${aiData.points?.length || 0}`)
     }
 
-    // Ensure all points have x,y coordinates
-    for (const point of aiData.points) {
+    // Validate point count is within reasonable range
+    if (aiData.points.length > 50) {
+      console.warn(`Point count ${aiData.points.length} is high, truncating to 50 points`)
+      aiData.points = aiData.points.slice(0, 50)
+    }
+
+    // Ensure all points have valid x,y coordinates within bounds
+    for (let i = 0; i < aiData.points.length; i++) {
+      const point = aiData.points[i]
       if (typeof point.x !== 'number' || typeof point.y !== 'number') {
-        throw new Error('Invalid point coordinates in OpenAI response')
+        throw new Error(`Invalid coordinates at point ${i}: x=${point.x}, y=${point.y}`)
       }
+      if (Math.abs(point.x) > 50 || Math.abs(point.y) > 50) {
+        console.warn(`Point ${i} coordinates (${point.x}, ${point.y}) are outside expected range, clamping`)
+        point.x = Math.max(-50, Math.min(50, point.x))
+        point.y = Math.max(-50, Math.min(50, point.y))
+      }
+    }
+
+    // Ensure path is closed (first point = last point)
+    const firstPoint = aiData.points[0]
+    const lastPoint = aiData.points[aiData.points.length - 1]
+    if (Math.abs(firstPoint.x - lastPoint.x) > 0.1 || Math.abs(firstPoint.y - lastPoint.y) > 0.1) {
+      console.log('Closing path: adding first point as last point')
+      aiData.points.push({x: firstPoint.x, y: firstPoint.y})
+    }
+
+    // Validate category
+    const validCategories = ['animal', 'nature', 'object', 'food', 'holiday', 'abstract', 'vehicle', 'character']
+    if (!validCategories.includes(aiData.category)) {
+      console.warn(`Invalid category "${aiData.category}", defaulting to "abstract"`)
+      aiData.category = 'abstract'
     }
 
     // Convert to our outline format
