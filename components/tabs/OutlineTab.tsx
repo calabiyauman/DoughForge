@@ -233,11 +233,11 @@ export default function OutlineTab() {
                   ✨ AI Shape Examples:
                 </p>
                 <ul className="text-xs text-purple-700 space-y-1">
-                  <li>• &ldquo;A cute cat silhouette with pointed ears&rdquo;</li>
-                  <li>• &ldquo;Simple oak leaf with rounded lobes&rdquo;</li>
-                  <li>• &ldquo;Cartoon rocket ship pointing upward&rdquo;</li>
-                  <li>• &ldquo;Vintage car from the side view&rdquo;</li>
-                  <li>• &ldquo;Mountain range with three peaks&rdquo;</li>
+                  <li>• &ldquo;A majestic lion with flowing mane&rdquo;</li>
+                  <li>• &ldquo;Graceful ballet dancer in mid-leap&rdquo;</li>
+                  <li>• &ldquo;Vintage steam locomotive&rdquo;</li>
+                  <li>• &ldquo;Cozy cottage with chimney smoke&rdquo;</li>
+                  <li>• &ldquo;Intricate snowflake pattern&rdquo;</li>
                 </ul>
               </div>
             </div>
@@ -245,7 +245,7 @@ export default function OutlineTab() {
           
           <div className="space-y-4">
             <textarea
-              placeholder="Describe the shape you want for your cookie cutter... (e.g., 'a simple dinosaur silhouette' or 'a Christmas tree with three layers')"
+              placeholder="Describe any shape you can imagine... (e.g., 'a majestic dragon breathing fire' or 'an elegant unicorn with flowing tail')"
               className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 min-h-[100px] text-sm resize-none"
               value={aiDescription}
               onChange={(e) => setAiDescription(e.target.value)}
