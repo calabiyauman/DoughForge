@@ -1,0 +1,99 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply scroll-smooth;
+  }
+  
+  body {
+    @apply bg-gradient-to-br from-primary-500 to-secondary-500 min-h-screen text-gray-800;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-2xl shadow-xl p-6 backdrop-blur-sm;
+  }
+  
+  .btn-primary {
+    @apply bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white font-medium py-3 px-6 rounded-lg transition-all duration-200 transform hover:-translate-y-0.5 hover:shadow-lg;
+  }
+  
+  .btn-secondary {
+    @apply bg-gray-600 hover:bg-gray-700 text-white font-medium py-3 px-6 rounded-lg transition-all duration-200 transform hover:-translate-y-0.5;
+  }
+  
+  .btn-success {
+    @apply bg-green-500 hover:bg-green-600 text-white font-medium py-3 px-6 rounded-lg transition-all duration-200 transform hover:-translate-y-0.5;
+  }
+  
+  .btn-danger {
+    @apply bg-red-500 hover:bg-red-600 text-white font-medium py-3 px-6 rounded-lg transition-all duration-200 transform hover:-translate-y-0.5;
+  }
+  
+  .input-field {
+    @apply w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-primary-500 focus:ring-2 focus:ring-primary-200 focus:outline-none transition-colors;
+  }
+  
+  .slider {
+    @apply w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer;
+  }
+  
+  .slider::-webkit-slider-thumb {
+    @apply appearance-none w-5 h-5 bg-primary-500 rounded-full cursor-pointer hover:bg-primary-600 transition-colors;
+  }
+  
+  .tab {
+    @apply px-6 py-3 cursor-pointer border-b-2 border-transparent transition-all duration-200 hover:text-primary-600;
+  }
+  
+  .tab.active {
+    @apply border-primary-500 text-primary-600 font-medium;
+  }
+  
+  .file-drop-zone {
+    @apply border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer transition-all duration-200 hover:border-primary-500 hover:bg-gray-50;
+  }
+  
+  .file-drop-zone.dragover {
+    @apply border-primary-500 bg-primary-50;
+  }
+}
+
+@layer utilities {
+  .text-shadow {
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+  }
+  
+  .glass {
+    @apply backdrop-blur-md bg-white/90 border border-white/20;
+  }
+  
+  .touch-manipulation {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Mobile-specific improvements */
+@media (max-width: 1024px) {
+  /* Ensure proper touch targets */
+  button, .button, input[type="button"], input[type="submit"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  /* Improve text readability on mobile */
+  body {
+    -webkit-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+  }
+  
+  /* Better focus indicators for accessibility */
+  button:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 2px solid #667eea;
+    outline-offset: 2px;
+  }
+}
