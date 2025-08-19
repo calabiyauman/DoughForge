@@ -1,13 +1,14 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { Upload, Image, Shapes } from 'lucide-react'
+import { Upload, Image, Shapes, Sparkles } from 'lucide-react'
 import { useCookieCutter } from '@/lib/context/CookieCutterContext'
 import { SVGParser } from '@/lib/parsers/SVGParser'
 
 const outlineMethods = [
   { id: 'svg', label: 'Upload SVG File', icon: Upload },
   { id: 'preset', label: 'Preset Shapes', icon: Shapes },
+  { id: 'ai', label: 'Generate with AI', icon: Sparkles },
 ]
 
 const presetShapes = [
@@ -31,6 +32,8 @@ export default function OutlineTab() {
   
   const [outlineMethod, setOutlineMethod] = useState('preset')
   const [dragOver, setDragOver] = useState(false)
+  const [aiDescription, setAiDescription] = useState('')
+  const [isGenerating, setIsGenerating] = useState(false)
 
   const handleFileUpload = useCallback(async (file: File) => {
     if (!file.type.includes('svg')) {
@@ -54,7 +57,7 @@ export default function OutlineTab() {
       console.error('Error loading SVG:', error)
       setStatus('Error loading SVG file')
     }
-  }, [setStatus, generateCookieCutter])
+  }, [setStatus, loadSVGOutline])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -72,27 +75,55 @@ export default function OutlineTab() {
     // Don't call generateCookieCutter here - loadPresetShape already does it
   }
 
+  const handleAIGeneration = useCallback(async () => {
+    if (!aiDescription.trim()) return
+
+    setIsGenerating(true)
+    setStatus('Generating AI shape...')
+
+    try {
+      // Import the AI generator
+      const { AIShapeGenerator } = await import('@/lib/generators/AIShapeGenerator')
+      
+      // Generate shape from description
+      const outline = await AIShapeGenerator.generateFromDescription(aiDescription.trim())
+      
+      if (outline) {
+        // Use the context's loadSVGOutline to update and regenerate
+        loadSVGOutline(outline)
+        setStatus(`Generated AI shape: "${aiDescription.trim()}"`)
+      } else {
+        setStatus('Error: Could not generate shape from description')
+      }
+    } catch (error) {
+      console.error('Error generating AI shape:', error)
+      setStatus('Error: AI generation failed. Please try a different description.')
+    } finally {
+      setIsGenerating(false)
+    }
+  }, [aiDescription, setStatus, loadSVGOutline])
+
   return (
     <div className="space-y-6">
       {/* Method Selection */}
       <div>
         <h3 className="text-lg font-semibold text-gray-800 mb-4">Cookie Outline</h3>
         
-        <div className="grid grid-cols-2 gap-2 lg:gap-3 mb-4 lg:mb-6">
+        <div className="grid grid-cols-3 gap-1 lg:gap-2 mb-4 lg:mb-6">
           {outlineMethods.map((method) => {
             const Icon = method.icon
             return (
               <button
                 key={method.id}
                 onClick={() => setOutlineMethod(method.id)}
-                className={`p-3 lg:p-4 rounded-lg border-2 transition-all duration-200 flex flex-col items-center gap-1 lg:gap-2 touch-manipulation ${
+                className={`p-2 lg:p-3 rounded-lg border-2 transition-all duration-200 flex flex-col items-center gap-1 touch-manipulation ${
                   outlineMethod === method.id
                     ? 'border-primary-500 bg-primary-50 text-primary-700'
                     : 'border-gray-200 hover:border-gray-300 active:bg-gray-50'
                 }`}
               >
-                <Icon className="w-5 lg:w-6 h-5 lg:h-6" />
-                <span className="text-xs lg:text-sm font-medium text-center leading-tight">{method.label}</span>
+                <Icon className="w-4 lg:w-5 h-4 lg:h-5" />
+                <span className="text-xs font-medium text-center leading-tight">{method.label}</span>
               </button>
             )
           })}
@@ -180,6 +211,67 @@ export default function OutlineTab() {
                 </div>
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* AI Generation */}
+      {outlineMethod === 'ai' && (
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Describe Your Cookie Cutter Shape
+          </label>
+          
+          {/* AI Generation Tips */}
+          <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 mb-4">
+            <div className="flex items-start space-x-2">
+              <div className="flex-shrink-0">
+                <Sparkles className="w-4 h-4 text-purple-500 mt-0.5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium text-purple-800 mb-1">
+                  ✨ AI Shape Examples:
+                </p>
+                <ul className="text-xs text-purple-700 space-y-1">
+                  <li>• &ldquo;A cute cat silhouette with pointed ears&rdquo;</li>
+                  <li>• &ldquo;Simple oak leaf with rounded lobes&rdquo;</li>
+                  <li>• &ldquo;Cartoon rocket ship pointing upward&rdquo;</li>
+                  <li>• &ldquo;Vintage car from the side view&rdquo;</li>
+                  <li>• &ldquo;Mountain range with three peaks&rdquo;</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          
+          <div className="space-y-4">
+            <textarea
+              placeholder="Describe the shape you want for your cookie cutter... (e.g., 'a simple dinosaur silhouette' or 'a Christmas tree with three layers')"
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 min-h-[100px] text-sm resize-none"
+              value={aiDescription}
+              onChange={(e) => setAiDescription(e.target.value)}
+            />
+            
+            <button
+              onClick={handleAIGeneration}
+              disabled={!aiDescription.trim() || isGenerating}
+              className={`w-full p-3 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2 ${
+                !aiDescription.trim() || isGenerating
+                  ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-purple-500 to-pink-500 text-white hover:from-purple-600 hover:to-pink-600 active:scale-95'
+              }`}
+            >
+              {isGenerating ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Generating Shape...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  Generate Cookie Cutter Shape
+                </>
+              )}
+            </button>
           </div>
         </div>
       )}
