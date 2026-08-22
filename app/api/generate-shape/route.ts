@@ -1,0 +1,213 @@
+import OpenAI from 'openai'
+import { createHash } from 'crypto'
+
+export const runtime = 'nodejs'
+
+const categories = [
+  'animal',
+  'nature',
+  'object',
+  'food',
+  'holiday',
+  'abstract',
+  'vehicle',
+  'character'
+] as const
+
+type Category = typeof categories[number]
+type Point = { x: number; y: number }
+type ShapeResponse = {
+  points: Point[]
+  reasoning: string
+  category: Category
+}
+
+type RateLimitEntry = { count: number; resetAt: number }
+
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000
+const RATE_LIMIT_MAX_REQUESTS = 10
+const MAX_BODY_BYTES = 2_048
+const MAX_DESCRIPTION_LENGTH = 200
+
+const globalForRateLimit = globalThis as typeof globalThis & {
+  doughForgeRateLimits?: Map<string, RateLimitEntry>
+}
+
+const rateLimits = globalForRateLimit.doughForgeRateLimits ?? new Map<string, RateLimitEntry>()
+globalForRateLimit.doughForgeRateLimits = rateLimits
+
+const shapeSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    points: {
+      type: 'array',
+      minItems: 15,
+      maxItems: 31,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          x: { type: 'number', minimum: -30, maximum: 30 },
+          y: { type: 'number', minimum: -30, maximum: 30 }
+        },
+        required: ['x', 'y']
+      }
+    },
+    reasoning: { type: 'string', minLength: 1, maxLength: 240 },
+    category: { type: 'string', enum: categories }
+  },
+  required: ['points', 'reasoning', 'category']
+} as const
+
+function getClientIp(request: Request): string {
+  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    || request.headers.get('x-real-ip')
+    || 'unknown'
+}
+
+function checkRateLimit(key: string): { allowed: boolean; retryAfter: number } {
+  const now = Date.now()
+  const existing = rateLimits.get(key)
+
+  if (!existing || existing.resetAt <= now) {
+    rateLimits.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
+    return { allowed: true, retryAfter: 0 }
+  }
+
+  if (existing.count >= RATE_LIMIT_MAX_REQUESTS) {
+    return {
+      allowed: false,
+      retryAfter: Math.max(1, Math.ceil((existing.resetAt - now) / 1000))
+    }
+  }
+
+  existing.count += 1
+  return { allowed: true, retryAfter: 0 }
+}
+
+function validateShape(value: unknown): ShapeResponse {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Model returned an invalid shape')
+  }
+
+  const candidate = value as Partial<ShapeResponse>
+  if (!Array.isArray(candidate.points) || candidate.points.length < 3 || candidate.points.length > 50) {
+    throw new Error('Model returned an invalid point array')
+  }
+
+  const points = candidate.points.map((point) => {
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+      throw new Error('Model returned invalid coordinates')
+    }
+    return {
+      x: Math.max(-30, Math.min(30, point.x)),
+      y: Math.max(-30, Math.min(30, point.y))
+    }
+  })
+
+  const first = points[0]
+  const last = points[points.length - 1]
+  if (Math.abs(first.x - last.x) > 0.1 || Math.abs(first.y - last.y) > 0.1) {
+    points.push({ ...first })
+  }
+
+  if (typeof candidate.reasoning !== 'string' || !candidate.reasoning.trim()) {
+    throw new Error('Model returned invalid reasoning')
+  }
+
+  if (!categories.includes(candidate.category as Category)) {
+    throw new Error('Model returned an invalid category')
+  }
+
+  return {
+    points,
+    reasoning: candidate.reasoning.trim().slice(0, 240),
+    category: candidate.category as Category
+  }
+}
+
+export async function POST(request: Request) {
+  const contentLength = Number(request.headers.get('content-length') || 0)
+  if (contentLength > MAX_BODY_BYTES) {
+    return Response.json({ error: 'Request is too large' }, { status: 413 })
+  }
+
+  const clientIp = getClientIp(request)
+  const rateLimit = checkRateLimit(clientIp)
+  if (!rateLimit.allowed) {
+    return Response.json(
+      { error: 'Too many shape requests. Please try again shortly.' },
+      { status: 429, headers: { 'Retry-After': String(rateLimit.retryAfter) } }
+    )
+  }
+
+  let body: unknown
+  try {
+    const rawBody = await request.text()
+    if (new TextEncoder().encode(rawBody).byteLength > MAX_BODY_BYTES) {
+      return Response.json({ error: 'Request is too large' }, { status: 413 })
+    }
+    body = JSON.parse(rawBody)
+  } catch {
+    return Response.json({ error: 'Request body must be valid JSON' }, { status: 400 })
+  }
+
+  const description = typeof (body as { description?: unknown })?.description === 'string'
+    ? (body as { description: string }).description.trim()
+    : ''
+
+  if (description.length < 3 || description.length > MAX_DESCRIPTION_LENGTH) {
+    return Response.json(
+      { error: `Description must be between 3 and ${MAX_DESCRIPTION_LENGTH} characters` },
+      { status: 400 }
+    )
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) {
+    console.error('OPENAI_API_KEY is not configured')
+    return Response.json({ error: 'Shape generation is temporarily unavailable' }, { status: 503 })
+  }
+
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
+
+  try {
+    const openai = new OpenAI({ apiKey })
+    const response = await openai.responses.create({
+      model,
+      store: false,
+      safety_identifier: createHash('sha256').update(clientIp).digest('hex').slice(0, 64),
+      instructions: [
+        'You design simple cookie-cutter silhouettes.',
+        'Return one closed clockwise outline centered near the origin.',
+        'Avoid holes, internal details, self-intersections, narrow bridges, and tiny features.',
+        'The first and last points must be identical.'
+      ].join(' '),
+      input: `Create a recognizable cookie-cutter outline for: ${description}`,
+      max_output_tokens: 1_200,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'cookie_cutter_outline',
+          strict: true,
+          schema: shapeSchema
+        }
+      }
+    })
+
+    if (!response.output_text) {
+      throw new Error('OpenAI returned no structured output')
+    }
+
+    const shape = validateShape(JSON.parse(response.output_text))
+    return Response.json(
+      { ...shape, model },
+      { headers: { 'Cache-Control': 'no-store' } }
+    )
+  } catch (error) {
+    console.error('OpenAI shape generation failed', error)
+    return Response.json({ error: 'AI generation failed. Please try again.' }, { status: 502 })
+  }
+}
+

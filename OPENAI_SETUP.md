@@ -1,108 +1,32 @@
-# 🤖 OpenAI Integration Setup
+# OpenAI integration setup
 
-## Overview
-The Cookie Cutter Generator now uses OpenAI's GPT-4 to generate unlimited, high-quality cookie cutter shapes from text descriptions!
+AI shape generation runs through the server-only `POST /api/generate-shape` route. The browser never receives the OpenAI credential.
 
-## 🔑 API Key Setup
+## Environment variables
 
-### Step 1: Get OpenAI API Key
-1. Go to [OpenAI Platform](https://platform.openai.com/account/api-keys)
-2. Sign in or create an account
-3. Click "Create new secret key"
-4. Copy your API key (starts with `sk-`)
+For local development, create `.env.local` in the project root:
 
-### Step 2: Add to Environment Variables
-
-#### For Local Development:
-Create a `.env.local` file in the project root:
 ```env
-NEXT_PUBLIC_OPENAI_API_KEY=sk-your-actual-api-key-here
+OPENAI_API_KEY=sk-your-project-key
+# Optional; defaults to gpt-4o-mini
+OPENAI_MODEL=gpt-4o-mini
 ```
 
-#### For Vercel Deployment:
-1. Go to your Vercel project dashboard
-2. Click "Settings" → "Environment Variables"
-3. Add new variable:
-   - **Name**: `NEXT_PUBLIC_OPENAI_API_KEY`
-   - **Value**: `sk-your-actual-api-key-here`
-   - **Environment**: Production, Preview, Development
-4. Redeploy your project
+For Vercel, add `OPENAI_API_KEY` under **Project Settings → Environment Variables** for Production, Preview, and Development. Add `OPENAI_MODEL` only when you want to override the default. Redeploy after changing the variables.
 
-#### Alternative Variable Name:
-You can also use `OPENAI_API_KEY` instead of `NEXT_PUBLIC_OPENAI_API_KEY`
+Never use `NEXT_PUBLIC_OPENAI_API_KEY`. Any variable prefixed with `NEXT_PUBLIC_` is included in browser JavaScript and must be considered public.
 
-## 🎯 How It Works
+## Request flow
 
-### AI Generation Process:
-1. **User Input**: "A cute dragon breathing fire"
-2. **OpenAI Prompt**: Detailed instructions for cookie cutter design
-3. **GPT-4 Response**: JSON with coordinate points and reasoning
-4. **Validation**: Ensures proper shape format
-5. **Fallback**: Uses procedural generation if AI fails
+1. The browser sends a description to `/api/generate-shape`.
+2. The route validates its size and applies a best-effort per-IP rate limit.
+3. The server calls the OpenAI Responses API with a strict JSON schema.
+4. The route validates and closes the returned outline before sending shape coordinates to the browser.
+5. If the route fails, the browser uses the existing procedural fallback.
 
-### AI Prompt Engineering:
-```
-Generate a cookie cutter outline for: "description"
+The route accepts descriptions from 3 to 200 characters and allows 10 requests per IP during a 10-minute window per warm server instance. For stronger distributed enforcement, configure a Vercel Firewall rate-limit rule or use a shared data store.
 
-Create a simple, clean silhouette suitable for a cookie cutter:
-- Recognizable and iconic 
-- Simple enough for cutting through dough
-- Closed path with no gaps
-- Centered around origin (0,0)
-- Sized between -30 to +30 units
-- 15-30 points for good detail
+## Secret rotation
 
-Return JSON: {"points": [...], "reasoning": "...", "category": "..."}
-```
+If a key was ever configured as `NEXT_PUBLIC_OPENAI_API_KEY`, revoke it in the OpenAI dashboard, remove that variable from Vercel, create a replacement key, and store the replacement only as `OPENAI_API_KEY`. After redeployment, search the public JavaScript bundles to confirm the revoked key is absent.
 
-## 🛡️ Fallback System
-
-If OpenAI fails (no API key, rate limits, errors):
-- **Pattern Matching**: Basic shapes (cat, heart, star, circle)
-- **Geometric Generation**: Polygon based on description complexity
-- **Graceful Degradation**: Always generates something usable
-
-## 💰 Cost Considerations
-
-### OpenAI Pricing (GPT-4 Turbo):
-- **Input**: ~$0.01 per 1K tokens
-- **Output**: ~$0.03 per 1K tokens
-- **Per Generation**: ~$0.02-0.05 (depending on complexity)
-
-### Cost Optimization:
-- Short, clear descriptions use fewer tokens
-- Fallback system prevents failed charges
-- Client-side generation (user pays via their own API key)
-
-## 🔧 Technical Details
-
-### Models Used:
-- **Primary**: `gpt-4-turbo-preview` (best quality)
-- **Fallback**: Procedural generation (no cost)
-
-### Response Format:
-```json
-{
-  "points": [{"x": 0, "y": 20}, {"x": -15, "y": 25}, ...],
-  "reasoning": "Simple cat silhouette with pointed ears",
-  "category": "animal"
-}
-```
-
-### Error Handling:
-- API key validation
-- Response format validation
-- Automatic fallback to procedural generation
-- User-friendly error messages
-
-## 🚀 Ready to Use!
-
-Once you add your OpenAI API key, users can generate unlimited custom cookie cutter shapes like:
-
-- "A majestic lion with a flowing mane"
-- "A vintage steam locomotive" 
-- "A graceful ballet dancer"
-- "A cozy cottage with a chimney"
-- "An intricate snowflake pattern"
-
-**The possibilities are endless! 🍪✨🤖**
