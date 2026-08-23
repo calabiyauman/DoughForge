@@ -294,7 +294,6 @@ export default function OutlineTab() {
           onChange={(e) => {
             const scale = parseFloat(e.target.value)
             updateParameters({ scale })
-            generateCookieCutter() // Regenerate with new scale
           }}
           className="slider"
         />
@@ -315,3 +314,4 @@ export default function OutlineTab() {
     </div>
   )
 }
+

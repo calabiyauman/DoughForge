@@ -3,6 +3,8 @@
  * Calls the server-side shape API and falls back to local procedural shapes.
  */
 
+import { closeOutline, cleanClosedOutline } from '@/lib/geometry/outline'
+
 interface AIShapeResponse {
   points: Array<{x: number, y: number}>
   reasoning: string
@@ -45,6 +47,11 @@ export class AIShapeGenerator {
     // Validate the response structure
     if (!aiData.points || !Array.isArray(aiData.points) || aiData.points.length < 3) {
       throw new Error(`Invalid points array: expected 3+ points, got ${aiData.points?.length || 0}`)
+    }
+
+    aiData.points = closeOutline(cleanClosedOutline(aiData.points, 0.01))
+    if (aiData.points.length < 4) {
+      throw new Error('Invalid points array: expected 3+ distinct points')
     }
 
     // Validate point count is within reasonable range

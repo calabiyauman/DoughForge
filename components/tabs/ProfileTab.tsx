@@ -11,14 +11,10 @@ const profileTypes = [
 ]
 
 export default function ProfileTab() {
-  const { parameters, updateParameters, generateCookieCutter } = useCookieCutter()
+  const { parameters, updateParameters } = useCookieCutter()
 
   const updateParam = (key: string, value: number | string | boolean) => {
     updateParameters({ [key]: value })
-    // Debounced regeneration
-    setTimeout(() => {
-      generateCookieCutter()
-    }, 300)
   }
 
   return (
@@ -266,3 +262,4 @@ export default function ProfileTab() {
     </div>
   )
 }
+

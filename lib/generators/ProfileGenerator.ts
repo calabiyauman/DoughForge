@@ -3,12 +3,12 @@
  * Implements various cookie cutter profiles including the user's professional method
  */
 
-interface ProfilePoint {
+export interface ProfilePoint {
   x: number
   y: number
 }
 
-interface ProfileMetadata {
+export interface ProfileMetadata {
   outerOffset?: number
   outerHeight?: number
   innerOffset?: number
@@ -22,7 +22,7 @@ interface ProfileMetadata {
   description: string
 }
 
-interface Profile {
+export interface Profile {
   type: string
   points: ProfilePoint[]
   metadata: ProfileMetadata
@@ -36,7 +36,19 @@ interface ProfessionalParams {
   chamfer?: number
 }
 
+export interface ProfileParameters extends ProfessionalParams {
+  profileType: string
+}
+
 export class ProfileGenerator {
+  static fromParameters(parameters: ProfileParameters): Profile {
+    if (parameters.profileType === 'professional') {
+      return this.professional(parameters)
+    }
+
+    return this.generate(parameters.profileType)
+  }
+
   static generate(type: string, params: any = {}): Profile {
     switch (type) {
       case 'professional':
@@ -82,20 +94,20 @@ export class ProfileGenerator {
     // Outer wall up
     points.push({ x: outerOffset, y: outerHeight })
     
-    // Inner wall outer edge
-    points.push({ x: Math.abs(innerOffset), y: outerHeight })
-    
-    // Inner wall up to chamfer start
-    points.push({ x: Math.abs(innerOffset), y: innerHeight - chamferY })
-    
-    // Chamfer (angled cut on interior)
-    points.push({ x: Math.abs(innerOffset) - chamferX, y: innerHeight })
-    
-    // Inner cutting edge
+    // Step from the broad handle to the outside of the taller cutting wall.
+    points.push({ x: 0, y: outerHeight })
+
+    // Outside cutting edge.
     points.push({ x: 0, y: innerHeight })
-    
-    // Back down the interior
-    points.push({ x: 0, y: 0 })
+
+    // Top of the cutting wall up to the chamfer.
+    points.push({ x: Math.min(0, innerOffset + chamferX), y: innerHeight })
+
+    // Chamfered interior cutting edge.
+    points.push({ x: innerOffset, y: innerHeight - chamferY })
+
+    // Interior wall back to the build plate.
+    points.push({ x: innerOffset, y: 0 })
     
     // Close the profile
     points.push({ x: outerOffset, y: 0 })
@@ -233,3 +245,4 @@ export class ProfileGenerator {
     }
   }
 }
+
