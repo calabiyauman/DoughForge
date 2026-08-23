@@ -153,6 +153,86 @@ export function hasSelfIntersections(points: readonly Point2D[]): boolean {
   return false
 }
 
+export function createOffsetOutline(
+  input: readonly Point2D[],
+  offset: number,
+  miterLimit = 4
+): Point2D[] {
+  const points = cleanClosedOutline(input)
+  const area = signedArea(points)
+  if (points.length < 3 || Math.abs(area) <= Number.EPSILON) return []
+
+  const outwardSide = area > 0 ? -1 : 1
+  const offsetPoints: Point2D[] = []
+
+  for (let index = 0; index < points.length; index += 1) {
+    const previous = points[(index - 1 + points.length) % points.length]
+    const current = points[index]
+    const next = points[(index + 1) % points.length]
+    const incomingLength = Math.hypot(current.x - previous.x, current.y - previous.y)
+    const outgoingLength = Math.hypot(next.x - current.x, next.y - current.y)
+    if (incomingLength <= Number.EPSILON || outgoingLength <= Number.EPSILON) continue
+
+    const incoming = {
+      x: (current.x - previous.x) / incomingLength,
+      y: (current.y - previous.y) / incomingLength
+    }
+    const outgoing = {
+      x: (next.x - current.x) / outgoingLength,
+      y: (next.y - current.y) / outgoingLength
+    }
+    const incomingNormal = {
+      x: -incoming.y * outwardSide,
+      y: incoming.x * outwardSide
+    }
+    const outgoingNormal = {
+      x: -outgoing.y * outwardSide,
+      y: outgoing.x * outwardSide
+    }
+    const turn = (incoming.x * outgoing.y - incoming.y * outgoing.x) * area
+
+    if (offset > 0 && turn < 0) {
+      offsetPoints.push(
+        {
+          x: current.x + incomingNormal.x * offset,
+          y: current.y + incomingNormal.y * offset
+        },
+        {
+          x: current.x + outgoingNormal.x * offset,
+          y: current.y + outgoingNormal.y * offset
+        }
+      )
+      continue
+    }
+
+    const summedX = incomingNormal.x + outgoingNormal.x
+    const summedY = incomingNormal.y + outgoingNormal.y
+    const summedLength = Math.hypot(summedX, summedY)
+    if (summedLength <= Number.EPSILON) continue
+
+    const normal = { x: summedX / summedLength, y: summedY / summedLength }
+    const denominator = normal.x * outgoingNormal.x + normal.y * outgoingNormal.y
+    const rawScale = Math.abs(denominator) > Number.EPSILON ? 1 / denominator : miterLimit
+    const miterScale = Math.max(-miterLimit, Math.min(miterLimit, rawScale))
+    offsetPoints.push({
+      x: current.x + normal.x * offset * miterScale,
+      y: current.y + normal.y * offset * miterScale
+    })
+  }
+
+  return offsetPoints
+}
+
+export function hasOffsetSelfIntersections(
+  points: readonly Point2D[],
+  offsets: readonly number[]
+): boolean {
+  return offsets.some((offset) => {
+    const offsetOutline = createOffsetOutline(points, offset)
+    return offsetOutline.length < 3 || hasSelfIntersections(offsetOutline)
+  })
+}
+
 export function normalizeOutline(
   input: readonly Point2D[],
   targetSize = 50

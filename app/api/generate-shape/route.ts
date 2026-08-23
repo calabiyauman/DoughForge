@@ -3,8 +3,8 @@ import { createHash } from 'crypto'
 import {
   closeOutline,
   cleanClosedOutline,
+  hasOffsetSelfIntersections,
   hasSelfIntersections,
-  minimumNonAdjacentSegmentDistance,
   normalizeOutline,
   signedArea
 } from '@/lib/geometry/outline'
@@ -36,8 +36,8 @@ const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000
 const RATE_LIMIT_MAX_REQUESTS = 10
 const MAX_BODY_BYTES = 2_048
 const MAX_DESCRIPTION_LENGTH = 200
-const MINIMUM_WALL_CLEARANCE_MM = 14
 const MAX_GENERATION_ATTEMPTS = 3
+const PROFESSIONAL_PROFILE_OFFSETS_MM = [6.35, -2.79] as const
 
 const globalForRateLimit = globalThis as typeof globalThis & {
   doughForgeRateLimits?: Map<string, RateLimitEntry>
@@ -143,7 +143,7 @@ function validateShape(value: unknown): ShapeResponse {
   }
 
   const normalizedPoints = normalizeOutline(distinctPoints, 50)
-  if (minimumNonAdjacentSegmentDistance(normalizedPoints) < MINIMUM_WALL_CLEARANCE_MM) {
+  if (hasOffsetSelfIntersections(normalizedPoints, PROFESSIONAL_PROFILE_OFFSETS_MM)) {
     throw new Error('Model returned an outline without enough wall clearance')
   }
   const points = closeOutline(normalizedPoints)
