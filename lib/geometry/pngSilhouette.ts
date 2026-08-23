@@ -115,37 +115,46 @@ function largestComponent(mask: Uint8Array, width: number, height: number): Uint
 
 function closeMask(mask: Uint8Array, width: number, height: number, radius: number): Uint8Array {
   if (radius <= 0) return mask
+  const boxCounts = (source: Uint8Array): Int32Array => {
+    const stride = width + 1
+    const integral = new Int32Array(stride * (height + 1))
+    for (let y = 0; y < height; y += 1) {
+      let rowTotal = 0
+      for (let x = 0; x < width; x += 1) {
+        rowTotal += source[y * width + x]
+        integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + rowTotal
+      }
+    }
+    return integral
+  }
+  const countInBox = (integral: Int32Array, left: number, top: number, right: number, bottom: number) => {
+    const stride = width + 1
+    return integral[bottom * stride + right]
+      - integral[top * stride + right]
+      - integral[bottom * stride + left]
+      + integral[top * stride + left]
+  }
+
   const dilated = new Uint8Array(mask.length)
+  const sourceCounts = boxCounts(mask)
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
-      let found = false
-      for (let dy = -radius; dy <= radius && !found; dy += 1) {
-        for (let dx = -radius; dx <= radius; dx += 1) {
-          const sourceX = x + dx
-          const sourceY = y + dy
-          if (sourceX >= 0 && sourceY >= 0 && sourceX < width && sourceY < height && mask[sourceY * width + sourceX]) {
-            found = true
-            break
-          }
-        }
-      }
-      if (found) dilated[y * width + x] = 1
+      const left = Math.max(0, x - radius)
+      const top = Math.max(0, y - radius)
+      const right = Math.min(width, x + radius + 1)
+      const bottom = Math.min(height, y + radius + 1)
+      if (countInBox(sourceCounts, left, top, right, bottom) > 0) dilated[y * width + x] = 1
     }
   }
 
   const eroded = new Uint8Array(mask.length)
+  const dilatedCounts = boxCounts(dilated)
+  const required = (radius * 2 + 1) ** 2
   for (let y = radius; y < height - radius; y += 1) {
     for (let x = radius; x < width - radius; x += 1) {
-      let filled = true
-      for (let dy = -radius; dy <= radius && filled; dy += 1) {
-        for (let dx = -radius; dx <= radius; dx += 1) {
-          if (!dilated[(y + dy) * width + x + dx]) {
-            filled = false
-            break
-          }
-        }
+      if (countInBox(dilatedCounts, x - radius, y - radius, x + radius + 1, y + radius + 1) === required) {
+        eroded[y * width + x] = 1
       }
-      if (filled) eroded[y * width + x] = 1
     }
   }
   return eroded
@@ -263,7 +272,7 @@ export function tracePngSilhouette(buffer: Buffer, targetSize = 75, closingRadiu
 
   const printableMask = closeMask(mask, width, height, closingRadius)
   const boundary = traceBoundary(largestComponent(printableMask, width, height), width, height)
-  const tolerance = Math.max(1, Math.max(width, height) / 500)
+  const tolerance = Math.max(1, Math.max(width, height) / 500, closingRadius / 5)
   const simplified = simplifyClosed(boundary, tolerance).map(({ x, y }) => ({ x, y: -y }))
   if (simplified.length < 12) throw new Error('Generated silhouette is too simple')
   return normalizeOutline(simplified, targetSize)
