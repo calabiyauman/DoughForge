@@ -142,7 +142,7 @@ function validateShape(value: unknown): ShapeResponse {
     throw new Error('Model returned an outline with no usable area')
   }
 
-  const normalizedPoints = normalizeOutline(distinctPoints, 50)
+  const normalizedPoints = normalizeOutline(distinctPoints, 75)
   if (hasOffsetSelfIntersections(normalizedPoints, PROFESSIONAL_PROFILE_OFFSETS_MM)) {
     throw new Error('Model returned an outline without enough wall clearance')
   }
