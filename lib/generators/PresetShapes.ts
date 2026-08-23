@@ -117,27 +117,22 @@ export class PresetShapes {
   }
 
   static butterfly(): Shape {
-    // A single, non-self-intersecting exterior silhouette with four broad wing
-    // lobes. The former parametric butterfly curve crossed through its center.
-    const points: ShapePoint[] = [
-      { x: 0, y: 20 },
-      { x: -14, y: 26 },
-      { x: -30, y: 30 },
-      { x: -37, y: 15 },
-      { x: -25, y: 0 },
-      { x: -35, y: -15 },
-      { x: -25, y: -30 },
-      { x: -12, y: -24 },
-      { x: 0, y: -12 },
-      { x: 12, y: -24 },
-      { x: 25, y: -30 },
-      { x: 35, y: -15 },
-      { x: 25, y: 0 },
-      { x: 37, y: 15 },
-      { x: 30, y: 30 },
-      { x: 14, y: 26 },
-      { x: 0, y: 20 }
+    // A broad head-to-abdomen half-outline with distinct upper and lower wing
+    // lobes. A single broad waist vertex remains safe for thick cutter offsets.
+    const rightSide: ShapePoint[] = [
+      { x: 0, y: 34 }, { x: 8, y: 29 }, { x: 14, y: 28 },
+      { x: 25, y: 34 }, { x: 38, y: 30 }, { x: 44, y: 20 },
+      { x: 43, y: 10 }, { x: 36, y: 4 }, { x: 24, y: 0 },
+      { x: 38, y: -12 }, { x: 39, y: -19 }, { x: 34, y: -27 },
+      { x: 26, y: -31 }, { x: 17, y: -30 }, { x: 10, y: -24 },
+      { x: 6, y: -32 }, { x: 0, y: -39 }
     ]
+
+    const leftSide = rightSide
+      .slice(1, -1)
+      .reverse()
+      .map(({ x, y }) => ({ x: -x, y }))
+    const points = [...rightSide, ...leftSide, { ...rightSide[0] }]
 
     return { type: 'preset', subtype: 'butterfly', points }
   }
