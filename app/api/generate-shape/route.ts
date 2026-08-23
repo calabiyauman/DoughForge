@@ -126,9 +126,7 @@ function validateShape(value: unknown): ShapeResponse {
     throw new Error('Model returned an outline with no usable area')
   }
 
-  // A wider default silhouette leaves enough physical room for the 9.14 mm
-  // professional profile around narrow necks and concave details.
-  const points = closeOutline(normalizeOutline(distinctPoints, 75))
+  const points = closeOutline(normalizeOutline(distinctPoints, 50))
 
   if (typeof candidate.reasoning !== 'string' || !candidate.reasoning.trim()) {
     throw new Error('Model returned invalid reasoning')
