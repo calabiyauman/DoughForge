@@ -10,18 +10,13 @@ interface AIShapeResponse {
   points: Array<{x: number, y: number}>
   reasoning: string
   category: string
+  generator?: string
 }
 
 export class AIShapeGenerator {
   static async generateFromDescription(description: string): Promise<any> {
     const cleanDescription = description.trim()
     console.log('🤖 OpenAI generating shape for:', cleanDescription)
-
-    // Prefer the verified local silhouette for an exact common-shape request.
-    // More descriptive butterfly prompts still reach the model below.
-    if (/^(?:a\s+)?butterfly$/i.test(cleanDescription)) {
-      return this.generateProceduralFallback(cleanDescription)
-    }
 
     try {
       // First try OpenAI generation
@@ -61,10 +56,9 @@ export class AIShapeGenerator {
       throw new Error('Invalid points array: expected 3+ distinct points')
     }
 
-    // Validate point count is within reasonable range
-    if (aiData.points.length > 50) {
-      console.warn(`Point count ${aiData.points.length} is high, truncating to 50 points`)
-      aiData.points = aiData.points.slice(0, 50)
+    // Traced silhouettes need more vertices than the legacy model-drawn polygons.
+    if (aiData.points.length > 400) {
+      throw new Error(`Generated outline is too detailed (${aiData.points.length} points)`)
     }
 
     // Ensure all points have valid x,y coordinates within bounds
@@ -106,7 +100,8 @@ export class AIShapeGenerator {
         category: aiData.category || 'unknown',
         pointCount: aiData.points.length,
         timestamp: Date.now(),
-        model: aiData.model || 'server-configured'
+        model: aiData.model || 'server-configured',
+        generator: aiData.generator || 'structured-vector'
       }
     }
 
