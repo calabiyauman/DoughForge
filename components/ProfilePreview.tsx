@@ -15,7 +15,10 @@ export default function ProfilePreview() {
     : ProfileGenerator.fromParameters(parameters)
 
   const drawing = useMemo(() => createProfileDrawing(previewProfile.points), [previewProfile])
-  const height = previewProfile.metadata.outerHeight ?? previewProfile.metadata.height ?? drawing.height
+  const height = previewProfile.metadata.innerHeight
+    ?? previewProfile.metadata.height
+    ?? previewProfile.metadata.outerHeight
+    ?? drawing.height
 
   return (
     <div className="w-full h-40 bg-gray-50 border-2 border-gray-200 rounded-lg overflow-hidden">
