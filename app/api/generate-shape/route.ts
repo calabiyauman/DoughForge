@@ -236,13 +236,18 @@ export async function POST(request: Request) {
       const imageBuffer = Buffer.from(encodedImage, 'base64')
       let shape: ShapeResponse | undefined
       let traceError: unknown
-      for (const closingRadius of [0, 2, 4, 6, 8]) {
+      for (const closingRadius of [0, 4, 8, 12, 18, 24, 30]) {
         try {
           const tracedPoints = tracePngSilhouette(imageBuffer, 75, closingRadius)
           shape = validateShape({
             points: tracedPoints,
             reasoning: 'Generated as a high-resolution silhouette, then traced and print-validated.',
             category: 'abstract'
+          })
+          console.info('Image silhouette accepted', {
+            model: imageModel,
+            closingRadius,
+            pointCount: shape.points.length
           })
           break
         } catch (error) {
