@@ -3,14 +3,45 @@
 import { useState } from 'react'
 import { Download, Save, Upload, Settings, FileText } from 'lucide-react'
 import { useCookieCutter } from '@/lib/context/CookieCutterContext'
+import { parseDesignSpec } from '@/lib/design'
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function safeProjectName(value: string): string {
+  return value
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'cookie-cutter-project'
+}
+
+function downloadProject(data: string, filename: string): void {
+  const blob = new Blob([data], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.hidden = true
+  document.body.appendChild(anchor)
+  try {
+    anchor.click()
+  } finally {
+    anchor.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
+  }
+}
 
 export default function ExportTab() {
   const { 
     parameters, 
-    updateParameters, 
+    updateParameters,
     exportSTL, 
     exportOBJ, 
-    cookieCutter 
+    cookieCutter,
+    design,
+    loadProject: loadProjectState
   } = useCookieCutter()
   
   const [projectName, setProjectName] = useState('my-cookie-cutter')
@@ -20,25 +51,22 @@ export default function ExportTab() {
       const projectData = {
         name: projectName,
         parameters,
+        design,
         timestamp: new Date().toISOString(),
-        version: '2.0.0'
+        version: '3.0.0'
       }
 
-      const dataStr = JSON.stringify(projectData, null, 2)
-      const blob = new Blob([dataStr], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${projectName}.cookiecutter`
-      a.click()
-      URL.revokeObjectURL(url)
+      downloadProject(
+        JSON.stringify(projectData, null, 2),
+        `${safeProjectName(projectName)}.cookiecutter`
+      )
     } catch (error) {
       console.error('Error saving project:', error)
       alert('Error saving project')
     }
   }
 
-  const loadProject = () => {
+  const handleLoadProject = () => {
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = '.cookiecutter,.json'
@@ -49,15 +77,31 @@ export default function ExportTab() {
         if (!file) return
 
         const text = await file.text()
-        const projectData = JSON.parse(text)
+        const projectData: unknown = JSON.parse(text)
+        if (!isRecord(projectData)) throw new Error('Project file must contain a JSON object')
 
-        if (projectData.parameters) {
-          updateParameters(projectData.parameters)
-          setProjectName(projectData.name || 'loaded-project')
+        const version = typeof projectData.version === 'string' ? projectData.version : ''
+        const loadedDesign = projectData.design
+          ? parseDesignSpec(JSON.stringify(projectData.design))
+          : null
+        if (!loadedDesign && !version.startsWith('2.')) {
+          throw new Error('Project does not contain a structured design')
         }
+
+        const loadedName = typeof projectData.name === 'string'
+          ? projectData.name.trim()
+          : loadedDesign?.name || 'loaded-project'
+        loadProjectState(
+          loadedDesign,
+          projectData.parameters ?? {},
+          loadedDesign
+            ? `Loaded project: ${loadedName || loadedDesign.name}`
+            : `Migrated legacy project settings: ${loadedName || 'loaded project'}`
+        )
+        setProjectName(loadedName || loadedDesign?.name || 'loaded-project')
       } catch (error) {
         console.error('Error loading project:', error)
-        alert('Error loading project')
+        alert(`Error loading project: ${error instanceof Error ? error.message : 'invalid project file'}`)
       }
     }
     
@@ -112,7 +156,7 @@ export default function ExportTab() {
               <Download className="w-4 lg:w-5 h-4 lg:h-5" />
               <div className="text-center lg:text-left">
                 <div className="font-medium text-sm lg:text-base">Download STL</div>
-                <div className="text-xs opacity-80">Ready for 3D printing</div>
+                <div className="text-xs opacity-80">Validate mesh in your slicer</div>
               </div>
             </button>
 
@@ -155,14 +199,15 @@ export default function ExportTab() {
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={saveProject}
-                className="flex items-center justify-center gap-2 btn-primary"
+                disabled={!design}
+                className="flex items-center justify-center gap-2 btn-primary disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Save className="w-4 h-4" />
                 Save Project
               </button>
 
               <button
-                onClick={loadProject}
+                onClick={handleLoadProject}
                 className="flex items-center justify-center gap-2 btn-secondary"
               >
                 <Upload className="w-4 h-4" />
@@ -177,8 +222,9 @@ export default function ExportTab() {
           <h4 className="font-medium text-gray-800 mb-2">💡 3D Printing Tips</h4>
           <ul className="text-sm text-gray-600 space-y-1">
             <li>• Print with cutting edge facing down</li>
-            <li>• Use PLA filament for food safety</li>
-            <li>• No supports needed with proper orientation</li>
+            <li>• Use a food-contact-safe material and finishing process</li>
+            <li>• Inspect multipart detail connections and manifoldness in your slicer</li>
+            <li>• Support requirements depend on the selected geometry</li>
             <li>• Sand cutting edge smooth before use</li>
           </ul>
         </div>

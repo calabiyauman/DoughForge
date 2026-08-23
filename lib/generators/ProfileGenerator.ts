@@ -3,6 +3,8 @@
  * Implements various cookie cutter profiles including the user's professional method
  */
 
+import { referenceV3Profile } from '../profiles/measuredReferenceV3'
+
 export interface ProfilePoint {
   x: number
   y: number
@@ -42,6 +44,10 @@ export interface ProfileParameters extends ProfessionalParams {
 
 export class ProfileGenerator {
   static fromParameters(parameters: ProfileParameters): Profile {
+    if (parameters.profileType === 'reference-v3') {
+      return referenceV3Profile()
+    }
+
     if (parameters.profileType === 'professional') {
       return this.professional(parameters)
     }
@@ -51,6 +57,8 @@ export class ProfileGenerator {
 
   static generate(type: string, params: any = {}): Profile {
     switch (type) {
+      case 'reference-v3':
+        return referenceV3Profile()
       case 'professional':
         return this.professional(params)
       case 'classic':

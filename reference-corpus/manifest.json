@@ -1,0 +1,194 @@
+{
+  "schema": "doughforge.reference-corpus-manifest",
+  "version": 1,
+  "description": "Development metadata for external cookie-cutter references; no assets are bundled.",
+  "referenceRootEnvironmentVariable": "DOUGHFORGE_REFERENCE_ROOT",
+  "sourceInventory": {
+    "status": "folder-listing-only",
+    "reviewedOn": "2026-08-23",
+    "notes": "Paths came from the supplied folder listing. Geometry, dimensions, preferred revisions, provenance, and rights remain unverified unless noted."
+  },
+  "splitPolicy": {
+    "currentSeed": "development-only",
+    "heldOutStatus": "not-selected",
+    "notes": "Select and freeze held-out families from the remaining external corpus after grouping, annotation, and rights review."
+  },
+  "families": [
+    {
+      "id": "barbie-logo",
+      "label": "Barbie logo",
+      "split": "development",
+      "generationMode": "text-logo",
+      "generationModeStatus": "provisional",
+      "items": [
+        { "id": "barbie-svg", "path": "Barbie/BarbieSVG.svg", "role": "source-vector", "format": "svg", "units": "unknown" },
+        { "id": "barbie-obj", "path": "Barbie/BarbieLogo.obj", "role": "reference-mesh", "format": "obj", "units": "unknown" },
+        { "id": "barbie-3mf", "path": "Barbie/BarbieLogo.3mf", "role": "project-model", "format": "3mf", "units": "mm" }
+      ],
+      "review": { "status": "partially-reviewed", "preferredItemId": "barbie-obj", "notes": "The user identified BarbieLogo.obj as an ideal text/logo result; dimensions and role breakdown remain unverified." },
+      "provenance": { "status": "unverified", "source": "user-supplied-local-reference-folder" },
+      "rights": { "status": "unknown", "owner": null, "license": null, "notes": "Branded material; do not redistribute until reviewed." }
+    },
+    {
+      "id": "wrestling-singlet",
+      "label": "Wrestling singlet",
+      "split": "development",
+      "generationMode": "outline-only",
+      "generationModeStatus": "provisional",
+      "items": [
+        { "id": "singlet-svg", "path": "Wrestling/singlet.svg", "role": "source-vector", "format": "svg", "units": "unknown" },
+        { "id": "singlet-obj", "path": "Wrestling/singlet.obj", "role": "reference-mesh", "format": "obj", "units": "unknown" }
+      ],
+      "review": { "status": "pending", "preferredItemId": null, "notes": "Confirm the preferred final and internal detail roles." },
+      "provenance": { "status": "unverified", "source": "user-supplied-local-reference-folder" },
+      "rights": { "status": "unknown", "owner": null, "license": null, "notes": null }
+    },
+    {
+      "id": "wrestling-high-top",
+      "label": "Wrestling high-top sneaker",
+      "split": "development",
+      "generationMode": "outline-only",
+      "generationModeStatus": "provisional",
+      "items": [
+        { "id": "high-top-svg", "path": "Wrestling/hightopsneaker.svg", "role": "source-vector", "format": "svg", "units": "unknown" },
+        { "id": "high-top-obj", "path": "Wrestling/hightopsneaker.obj", "role": "reference-mesh", "format": "obj", "units": "unknown" }
+      ],
+      "review": { "status": "pending", "preferredItemId": null, "notes": "Confirm whether shoe details should be stamp geometry." },
+      "provenance": { "status": "unverified", "source": "user-supplied-local-reference-folder" },
+      "rights": { "status": "unknown", "owner": null, "license": null, "notes": null }
+    },
+    {
+      "id": "cybertruck",
+      "label": "Cybertruck",
+      "split": "development",
+      "generationMode": "outline-only",
+      "generationModeStatus": "provisional",
+      "items": [
+        { "id": "cybertruck-3mf", "path": "Tesla/cybertruck.3mf", "role": "project-model", "format": "3mf", "units": "mm" },
+        { "id": "cybertruck-photo", "path": "Tesla/Cybertruck.jpg", "role": "reference-image", "format": "jpg", "units": "not-applicable" },
+        { "id": "cybertruck-cutter-render", "path": "Tesla/cybertruckcutterrender.png", "role": "render-image", "format": "png", "units": "not-applicable" }
+      ],
+      "review": { "status": "pending", "preferredItemId": null, "notes": "Confirm the preferred source view and 3MF build object." },
+      "provenance": { "status": "unverified", "source": "user-supplied-local-reference-folder" },
+      "rights": { "status": "unknown", "owner": null, "license": null, "notes": "Branded material; do not redistribute until reviewed." }
+    },
+    {
+      "id": "baseball-mitt",
+      "label": "Baseball mitt",
+      "split": "development",
+      "generationMode": "outline-and-stamp",
+      "generationModeStatus": "provisional",
+      "items": [
+        { "id": "mitt-cookie-stl", "path": "Fiverrr/Baseball Mitt/BaseballMittcookie.stl", "role": "reference-mesh", "format": "stl", "units": "unknown" },
+        { "id": "mitt-3mf", "path": "Fiverrr/Baseball Mitt/baseballmittcookie.3mf", "role": "project-model", "format": "3mf", "units": "mm" },
+        { "id": "mitt-design-image", "path": "Fiverrr/Baseball Mitt/Baseball mitt Design.jpg", "role": "reference-image", "format": "jpg", "units": "not-applicable" }
+      ],
+      "review": { "status": "pending", "preferredItemId": null, "notes": "Annotate the outer cutter, internal details, and preferred revision." },
+      "provenance": { "status": "unverified", "source": "user-supplied-local-reference-folder" },
+      "rights": { "status": "unknown", "owner": null, "license": null, "notes": null }
+    },
+    {
+      "id": "buddy-the-elf",
+      "label": "Buddy the Elf",
+      "split": "development",
+      "generationMode": "unknown",
+      "generationModeStatus": "needs-review",
+      "items": [
+        { "id": "buddy-svg", "path": "Buddy the elf/buddy.svg", "role": "source-vector", "format": "svg", "units": "unknown" },
+        { "id": "buddy-3mf", "path": "Buddy the elf/buddytheelf.3mf", "role": "project-model", "format": "3mf", "units": "mm" },
+        { "id": "buddy-image", "path": "Buddy the elf/il_570xN.3503284074_pncz.png", "role": "reference-image", "format": "png", "units": "not-applicable" }
+      ],
+      "review": { "status": "pending", "preferredItemId": null, "notes": "Classify the mode and required character details." },
+      "provenance": { "status": "unverified", "source": "user-supplied-local-reference-folder" },
+      "rights": { "status": "unknown", "owner": null, "license": null, "notes": "Character material; do not redistribute until reviewed." }
+    },
+    {
+      "id": "welding-set",
+      "label": "Welding set",
+      "split": "development",
+      "generationMode": "multipart",
+      "generationModeStatus": "provisional",
+      "items": [
+        { "id": "welding-set-3mf", "path": "Welding Set/WeldingSet.3mf", "role": "combined-set", "format": "3mf", "units": "mm" },
+        { "id": "welding-helmet-obj", "path": "Welding Set/WeldingHelmet.obj", "role": "component-mesh", "format": "obj", "units": "unknown" },
+        { "id": "mig-welder-obj", "path": "Welding Set/MigWelder.obj", "role": "component-mesh", "format": "obj", "units": "unknown" },
+        { "id": "welding-truck-3mf", "path": "Welding Set/weldingtruck.3mf", "role": "component-model", "format": "3mf", "units": "mm" }
+      ],
+      "review": { "status": "pending", "preferredItemId": null, "notes": "Map set components and annotate cut, stamp, support, and handle roles." },
+      "provenance": { "status": "unverified", "source": "user-supplied-local-reference-folder" },
+      "rights": { "status": "unknown", "owner": null, "license": null, "notes": null }
+    },
+    {
+      "id": "tools-set",
+      "label": "Tools set",
+      "split": "development",
+      "generationMode": "multipart",
+      "generationModeStatus": "provisional",
+      "items": [
+        { "id": "tools-set-3mf", "path": "Tools/toolsSet.3mf", "role": "combined-set", "format": "3mf", "units": "mm" },
+        { "id": "tools-hammer-obj", "path": "Tools/hammer.obj", "role": "component-mesh", "format": "obj", "units": "unknown" },
+        { "id": "tools-wrench-3mf", "path": "Tools/Wrench.3mf", "role": "component-model", "format": "3mf", "units": "mm" }
+      ],
+      "review": { "status": "pending", "preferredItemId": null, "notes": "Confirm benchmark components and preferred revisions." },
+      "provenance": { "status": "unverified", "source": "user-supplied-local-reference-folder" },
+      "rights": { "status": "unknown", "owner": null, "license": null, "notes": null }
+    },
+    {
+      "id": "ribbon-frame-stamp",
+      "label": "Ribbon frame and stamp",
+      "split": "development",
+      "generationMode": "outline-and-stamp",
+      "generationModeStatus": "provisional",
+      "items": [
+        { "id": "ribbon-frame-stl", "path": "ribbon-cookie-cutter-dwain/Ribbon Frame.stl", "role": "cutter-mesh", "format": "stl", "units": "unknown" },
+        { "id": "ribbon-stamp-stl", "path": "ribbon-cookie-cutter-dwain/Ribbon Stamp.stl", "role": "stamp-mesh", "format": "stl", "units": "unknown" }
+      ],
+      "review": { "status": "pending", "preferredItemId": null, "notes": "Confirm assembly relationship, clearance, scale, and orientation." },
+      "provenance": { "status": "unverified", "source": "user-supplied-local-reference-folder" },
+      "rights": { "status": "unknown", "owner": null, "license": null, "notes": null }
+    },
+    {
+      "id": "dirtbike",
+      "label": "Dirtbike",
+      "split": "development",
+      "generationMode": "unknown",
+      "generationModeStatus": "needs-review",
+      "items": [
+        { "id": "dirtbike-obj", "path": "Dirtbike set/dirtbike.obj", "role": "reference-mesh", "format": "obj", "units": "unknown" },
+        { "id": "dirtbike-3mf", "path": "Dirtbike set/dirtbike.3mf", "role": "project-model", "format": "3mf", "units": "mm" }
+      ],
+      "review": { "status": "pending", "preferredItemId": null, "notes": "Classify mode and required vehicle landmarks." },
+      "provenance": { "status": "unverified", "source": "user-supplied-local-reference-folder" },
+      "rights": { "status": "unknown", "owner": null, "license": null, "notes": null }
+    },
+    {
+      "id": "christmas-tree",
+      "label": "Little Tikes Christmas tree",
+      "split": "development",
+      "generationMode": "unknown",
+      "generationModeStatus": "needs-review",
+      "items": [
+        { "id": "christmas-tree-obj", "path": "Christmas/LittletikesXmastree.obj", "role": "reference-mesh", "format": "obj", "units": "unknown" },
+        { "id": "christmas-tree-3mf", "path": "Christmas/LittletikesXmastree.3mf", "role": "project-model", "format": "3mf", "units": "mm" }
+      ],
+      "review": { "status": "pending", "preferredItemId": null, "notes": "Classify mode and confirm whether the name indicates branded source material." },
+      "provenance": { "status": "unverified", "source": "user-supplied-local-reference-folder" },
+      "rights": { "status": "unknown", "owner": null, "license": null, "notes": "Potentially branded material; do not redistribute until reviewed." }
+    },
+    {
+      "id": "ice-cream-cone-set",
+      "label": "Ice cream cone set",
+      "split": "development",
+      "generationMode": "multipart",
+      "generationModeStatus": "provisional",
+      "items": [
+        { "id": "ice-cream-set-obj", "path": "Ice Cream/IceCreamConeSet.obj", "role": "combined-set", "format": "obj", "units": "unknown" },
+        { "id": "ice-cream-cone-obj", "path": "Ice Cream/IceCream Cone.obj", "role": "component-mesh", "format": "obj", "units": "unknown" },
+        { "id": "ice-cream-cone-3mf", "path": "Ice Cream/Icecream Cone.3mf", "role": "project-model", "format": "3mf", "units": "mm" }
+      ],
+      "review": { "status": "pending", "preferredItemId": null, "notes": "Map combined-set objects to components and identify preferred revisions." },
+      "provenance": { "status": "unverified", "source": "user-supplied-local-reference-folder" },
+      "rights": { "status": "unknown", "owner": null, "license": null, "notes": null }
+    }
+  ]
+}

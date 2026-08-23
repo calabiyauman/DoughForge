@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   description: 'Design custom cookie cutters for 3D printing with real-time preview',
   keywords: ['cookie cutter', '3D printing', 'SVG', 'STL', 'design tool'],
   authors: [{ name: 'Cookie Cutter Generator' }],
+  icons: { icon: '/favicon.svg', shortcut: '/favicon.svg' },
 }
 
 export const viewport = {

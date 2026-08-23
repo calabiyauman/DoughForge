@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { Upload, Image, Shapes, Sparkles } from 'lucide-react'
+import { Upload, Shapes, Sparkles } from 'lucide-react'
 import { useCookieCutter } from '@/lib/context/CookieCutterContext'
 import { SVGParser } from '@/lib/parsers/SVGParser'
 
@@ -25,8 +25,9 @@ export default function OutlineTab() {
     parameters, 
     updateParameters, 
     setStatus, 
-    loadPresetShape, 
-    loadSVGOutline,
+    loadPresetShape,
+    loadDesign,
+    loadLegacyOutline,
     generateCookieCutter 
   } = useCookieCutter()
   
@@ -34,9 +35,11 @@ export default function OutlineTab() {
   const [dragOver, setDragOver] = useState(false)
   const [aiDescription, setAiDescription] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
+  const [importSummary, setImportSummary] = useState<string | null>(null)
+  const [importWarnings, setImportWarnings] = useState<string[]>([])
 
   const handleFileUpload = useCallback(async (file: File) => {
-    if (!file.type.includes('svg')) {
+    if (!file.type.includes('svg') && !file.name.toLowerCase().endsWith('.svg')) {
       setStatus('Error: Please upload an SVG file')
       return
     }
@@ -44,35 +47,46 @@ export default function OutlineTab() {
     try {
       setStatus('Loading SVG file...')
       const text = await file.text()
-      const outline = SVGParser.parse(text)
-      
-      if (outline) {
-        // Use the context's loadSVGOutline to update and regenerate
-        loadSVGOutline(outline)
-        setStatus(`Loaded SVG: ${file.name}`)
-      } else {
-        setStatus('Error: Could not parse SVG file')
-      }
+      const result = SVGParser.parseOrThrow(text, {
+        name: file.name.replace(/\.svg$/i, '')
+      })
+      loadDesign(result.design, `Loaded ${file.name}: ${result.stats.closedContours} contours, ${result.stats.openStrokes} strokes`)
+      const warningText = result.warnings.length > 0
+        ? ` ${result.warnings.length} import warning${result.warnings.length === 1 ? '' : 's'}.`
+        : ''
+      setImportSummary(
+        `${result.stats.closedContours} closed contours, ${result.stats.holes} holes, ${result.stats.openStrokes} open detail strokes, and ${result.stats.points} fitted points.${warningText}`
+      )
+      setImportWarnings(result.warnings)
     } catch (error) {
       console.error('Error loading SVG:', error)
-      setStatus('Error loading SVG file')
+      setImportSummary(null)
+      setImportWarnings([])
+      setStatus(`Error loading SVG: ${error instanceof Error ? error.message : 'unknown import error'}`)
     }
-  }, [setStatus, loadSVGOutline])
+  }, [setStatus, loadDesign])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setDragOver(false)
     
     const files = e.dataTransfer.files
-    if (files.length > 0 && files[0].type.includes('svg')) {
-      handleFileUpload(files[0])
+    if (files.length > 0) handleFileUpload(files[0])
+  }, [handleFileUpload])
+
+  const openSvgFilePicker = useCallback(() => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.svg'
+    input.onchange = (event) => {
+      const file = (event.target as HTMLInputElement).files?.[0]
+      if (file) handleFileUpload(file)
     }
+    input.click()
   }, [handleFileUpload])
 
   const handlePresetChange = (shape: string) => {
-    console.log(`🎯 OutlineTab: Preset shape clicked: ${shape}`)
     loadPresetShape(shape)
-    // Don't call generateCookieCutter here - loadPresetShape already does it
   }
 
   const handleAIGeneration = useCallback(async () => {
@@ -82,19 +96,18 @@ export default function OutlineTab() {
     setStatus('Generating AI shape...')
 
     try {
-      // Import the AI generator
       const { AIShapeGenerator } = await import('@/lib/generators/AIShapeGenerator')
-      
-      // Generate shape from description
       const outline = await AIShapeGenerator.generateFromDescription(aiDescription.trim())
-      
+
       if (outline) {
-        // Use the context's loadSVGOutline to update and regenerate
-        loadSVGOutline(outline)
         const source = outline.metadata?.source
-        setStatus(source === 'openai-server'
-          ? `Generated AI shape: "${aiDescription.trim()}"`
-          : `Generated printable fallback for: "${aiDescription.trim()}"`)
+        loadLegacyOutline(
+          outline,
+          aiDescription.trim(),
+          source === 'openai-server'
+            ? `Generated AI outline: "${aiDescription.trim()}"`
+            : `Generated printable fallback for: "${aiDescription.trim()}"`
+        )
       } else {
         setStatus('Error: Could not generate shape from description')
       }
@@ -104,7 +117,7 @@ export default function OutlineTab() {
     } finally {
       setIsGenerating(false)
     }
-  }, [aiDescription, setStatus, loadSVGOutline])
+  }, [aiDescription, setStatus, loadLegacyOutline])
 
   return (
     <div className="space-y-6">
@@ -153,11 +166,10 @@ export default function OutlineTab() {
                   💡 For Best Results:
                 </p>
                 <ul className="text-xs text-blue-700 space-y-1">
-                  <li>• Save as <strong>SVG</strong> with <strong>closed paths/shapes</strong></li>
-                  <li>• Use <strong>black fills</strong> or <strong>outlines</strong> (no strokes)</li>
-                  <li>• <strong>Merge/union</strong> overlapping shapes into single path</li>
-                  <li>• Keep designs <strong>simple</strong> - avoid tiny details</li>
-                  <li>• Size: <strong>100-500px</strong> works well</li>
+                  <li>• Bézier curves, arcs, compound paths, holes, and nested transforms are supported</li>
+                  <li>• Closed shapes become cutting walls; open paths become detail stamps</li>
+                  <li>• Add <strong>data-doughforge-role=&quot;stamp&quot;</strong> to override an element&apos;s role</li>
+                  <li>• Convert live text to paths when exact lettering matters</li>
                 </ul>
               </div>
             </div>
@@ -165,21 +177,21 @@ export default function OutlineTab() {
           
           <div
             className={`file-drop-zone ${dragOver ? 'dragover' : ''}`}
+            role="button"
+            tabIndex={0}
+            aria-label="Upload SVG file"
             onDrop={handleDrop}
             onDragOver={(e) => {
               e.preventDefault()
               setDragOver(true)
             }}
             onDragLeave={() => setDragOver(false)}
-            onClick={() => {
-              const input = document.createElement('input')
-              input.type = 'file'
-              input.accept = '.svg'
-              input.onchange = (e) => {
-                const file = (e.target as HTMLInputElement).files?.[0]
-                if (file) handleFileUpload(file)
+            onClick={openSvgFilePicker}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                openSvgFilePicker()
               }
-              input.click()
             }}
           >
             <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
@@ -192,6 +204,25 @@ export default function OutlineTab() {
               </p>
             </div>
           </div>
+
+          {importSummary && (
+            <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+              {importSummary}
+            </div>
+          )}
+
+          {importWarnings.length > 0 && (
+            <details className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+              <summary className="cursor-pointer font-medium">
+                Review {importWarnings.length} import warning{importWarnings.length === 1 ? '' : 's'}
+              </summary>
+              <ul className="mt-2 space-y-1 pl-4">
+                {importWarnings.map((warning, index) => (
+                  <li key={`${index}-${warning}`}>• {warning}</li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       )}
 
@@ -234,6 +265,10 @@ export default function OutlineTab() {
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium text-purple-800 mb-1">
                   ✨ AI Shape Examples:
+                </p>
+                <p className="mb-2 text-xs text-purple-700">
+                  Prompt generation currently creates one outer cutting silhouette. Use a
+                  role-tagged SVG for holes and internal stamp details in this milestone.
                 </p>
                 <ul className="text-xs text-purple-700 space-y-1">
                   <li>• &ldquo;A majestic lion with flowing mane&rdquo;</li>

@@ -4,7 +4,8 @@ import { useCookieCutter } from '@/lib/context/CookieCutterContext'
 import ProfilePreview from '../ProfilePreview'
 
 const profileTypes = [
-  { id: 'professional', label: 'Professional (Your Method)' },
+  { id: 'reference-v3', label: 'Reference V3 (Measured)' },
+  { id: 'professional', label: 'Legacy Professional' },
   { id: 'classic', label: 'Classic Straight' },
   { id: 'bella', label: 'Bella Style' },
   { id: 'ergonomic', label: 'Ergonomic' },
@@ -40,6 +41,16 @@ export default function ProfileTab() {
             ))}
           </select>
         </div>
+
+        {parameters.profileType === 'reference-v3' && (
+          <div className="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+            <h4 className="mb-2 font-medium text-emerald-800">Measured Reference V3</h4>
+            <p className="text-sm text-emerald-700">
+              25.4mm overall height, 2.032mm flange height, 1.27mm wall,
+              0.99mm cutting lip, and 6.78mm flange width.
+            </p>
+          </div>
+        )}
 
         {/* Professional Parameters */}
         {parameters.profileType === 'professional' && (
