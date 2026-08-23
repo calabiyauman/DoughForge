@@ -17,6 +17,12 @@ export class AIShapeGenerator {
     const cleanDescription = description.trim()
     console.log('🤖 OpenAI generating shape for:', cleanDescription)
 
+    // Prefer the verified local silhouette for an exact common-shape request.
+    // More descriptive butterfly prompts still reach the model below.
+    if (/^(?:a\s+)?butterfly$/i.test(cleanDescription)) {
+      return this.generateProceduralFallback(cleanDescription)
+    }
+
     try {
       // First try OpenAI generation
       const aiResult = await this.generateWithOpenAI(cleanDescription)
