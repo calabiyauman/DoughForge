@@ -5,6 +5,7 @@ import { ProfileGenerator } from '../lib/generators/ProfileGenerator'
 import {
   cleanClosedOutline,
   hasSelfIntersections,
+  minimumNonAdjacentSegmentDistance,
   normalizeOutline
 } from '../lib/geometry/outline'
 
@@ -162,6 +163,7 @@ test('concave AI outlines create a closed professional mesh without folded trian
   const { vertices, faces } = result.geometry
   const edgeUses = new Map<string, number>()
 
+  assert.ok(minimumNonAdjacentSegmentDistance(cleanClosedOutline(butterfly.points)) < 14)
   assert.ok(vertices.every(Number.isFinite))
 
   for (let index = 0; index < faces.length; index += 3) {

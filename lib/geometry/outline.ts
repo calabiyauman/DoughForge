@@ -72,6 +72,55 @@ function segmentsIntersect(a: Point2D, b: Point2D, c: Point2D, d: Point2D): bool
   )
 }
 
+function pointToSegmentDistance(point: Point2D, start: Point2D, end: Point2D): number {
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  const lengthSquared = dx * dx + dy * dy
+
+  if (lengthSquared <= Number.EPSILON) {
+    return Math.sqrt(distanceSquared(point, start))
+  }
+
+  const projection = Math.max(0, Math.min(1, (
+    (point.x - start.x) * dx + (point.y - start.y) * dy
+  ) / lengthSquared))
+  return Math.hypot(
+    point.x - (start.x + projection * dx),
+    point.y - (start.y + projection * dy)
+  )
+}
+
+export function minimumNonAdjacentSegmentDistance(points: readonly Point2D[]): number {
+  const length = points.length
+  let minimum = Number.POSITIVE_INFINITY
+
+  for (let first = 0; first < length; first += 1) {
+    const firstNext = (first + 1) % length
+
+    for (let second = first + 1; second < length; second += 1) {
+      const secondNext = (second + 1) % length
+      if (firstNext === second || secondNext === first) continue
+
+      const firstStart = points[first]
+      const firstEnd = points[firstNext]
+      const secondStart = points[second]
+      const secondEnd = points[secondNext]
+
+      if (segmentsIntersect(firstStart, firstEnd, secondStart, secondEnd)) return 0
+
+      minimum = Math.min(
+        minimum,
+        pointToSegmentDistance(firstStart, secondStart, secondEnd),
+        pointToSegmentDistance(firstEnd, secondStart, secondEnd),
+        pointToSegmentDistance(secondStart, firstStart, firstEnd),
+        pointToSegmentDistance(secondEnd, firstStart, firstEnd)
+      )
+    }
+  }
+
+  return minimum
+}
+
 export function hasSelfIntersections(points: readonly Point2D[]): boolean {
   const length = points.length
 
