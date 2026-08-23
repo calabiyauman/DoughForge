@@ -42,6 +42,52 @@ function SimpleOrbitControls({ controlsRef }: { controlsRef: any }) {
   return null
 }
 
+function CameraFitter({
+  vertices,
+  controlsRef
+}: {
+  vertices: Float32Array
+  controlsRef: { current: any }
+}) {
+  const { camera, size } = useThree()
+
+  useEffect(() => {
+    if (!(camera instanceof THREE.PerspectiveCamera) || vertices.length < 3) return
+
+    const bounds = new THREE.Box3()
+    const point = new THREE.Vector3()
+    for (let index = 0; index < vertices.length; index += 3) {
+      bounds.expandByPoint(point.set(
+        vertices[index],
+        vertices[index + 1],
+        vertices[index + 2]
+      ))
+    }
+
+    const dimensions = bounds.getSize(new THREE.Vector3())
+    const largestDimension = Math.max(dimensions.x, dimensions.y, dimensions.z)
+    const verticalFov = THREE.MathUtils.degToRad(camera.fov)
+    const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * (size.width / size.height))
+    const limitingFov = Math.min(verticalFov, horizontalFov)
+    const distance = Math.max(30, (largestDimension / 2) / Math.tan(limitingFov / 2) * 1.65)
+    const direction = new THREE.Vector3(1, 1, 1).normalize()
+
+    camera.position.copy(direction.multiplyScalar(distance))
+    camera.near = Math.max(0.1, distance / 100)
+    camera.far = distance * 10
+    camera.lookAt(0, 0, 0)
+    camera.updateProjectionMatrix()
+
+    if (controlsRef.current) {
+      controlsRef.current.target.set(0, 0, 0)
+      controlsRef.current.update()
+      controlsRef.current.saveState()
+    }
+  }, [camera, controlsRef, size.height, size.width, vertices])
+
+  return null
+}
+
 export default function ThreeViewer() {
   const { cookieCutter, wireframeMode } = useCookieCutter()
   const controlsRef = useRef<any>()
@@ -135,10 +181,16 @@ export default function ThreeViewer() {
 
         {/* Cookie Cutter Model */}
         {cookieCutter && (
-          <CookieCutterMesh 
-            geometry={cookieCutter.geometry} 
-            wireframe={wireframeMode}
-          />
+          <>
+            <CookieCutterMesh 
+              geometry={cookieCutter.geometry} 
+              wireframe={wireframeMode}
+            />
+            <CameraFitter
+              vertices={cookieCutter.geometry.vertices}
+              controlsRef={controlsRef}
+            />
+          </>
         )}
 
         {/* Simple Controls without Drei */}
@@ -147,3 +199,4 @@ export default function ThreeViewer() {
     </div>
   )
 }
+

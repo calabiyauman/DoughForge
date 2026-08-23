@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { CookieCutterGenerator } from '../lib/generators/CookieCutterGenerator'
 import { ProfileGenerator } from '../lib/generators/ProfileGenerator'
+import { PresetShapes } from '../lib/generators/PresetShapes'
 import {
   cleanClosedOutline,
   hasOffsetSelfIntersections,
@@ -165,7 +166,7 @@ test('concave AI outlines create a closed professional mesh without folded trian
 
   assert.equal(
     hasOffsetSelfIntersections(cleanClosedOutline(butterfly.points), [6.35, -2.79]),
-    true
+    false
   )
   assert.ok(vertices.every(Number.isFinite))
 
@@ -193,5 +194,17 @@ test('concave AI outlines create a closed professional mesh without folded trian
   }
 
   assert.ok([...edgeUses.values()].every((uses) => uses === 2))
+})
+
+test('butterfly preset is a printable single exterior silhouette', () => {
+  const butterfly = cleanClosedOutline(PresetShapes.butterfly().points)
+
+  assert.equal(hasSelfIntersections(butterfly), false)
+  assert.equal(hasOffsetSelfIntersections(butterfly, [6.35, -2.79]), false)
+  assert.doesNotThrow(() => CookieCutterGenerator.generate({
+    outline: { points: butterfly },
+    profile: ProfileGenerator.professional(),
+    smoothCorners: true
+  }))
 })
 

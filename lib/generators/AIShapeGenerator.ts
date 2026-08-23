@@ -4,6 +4,7 @@
  */
 
 import { closeOutline, cleanClosedOutline } from '@/lib/geometry/outline'
+import { PresetShapes } from './PresetShapes'
 
 interface AIShapeResponse {
   points: Array<{x: number, y: number}>
@@ -15,6 +16,12 @@ export class AIShapeGenerator {
   static async generateFromDescription(description: string): Promise<any> {
     const cleanDescription = description.trim()
     console.log('🤖 OpenAI generating shape for:', cleanDescription)
+
+    // Prefer the verified local silhouette for an exact common-shape request.
+    // More descriptive butterfly prompts still reach the model below.
+    if (/^(?:a\s+)?butterfly$/i.test(cleanDescription)) {
+      return this.generateProceduralFallback(cleanDescription)
+    }
 
     try {
       // First try OpenAI generation
@@ -126,35 +133,16 @@ export class AIShapeGenerator {
     if (lowerDesc.includes('circle') || lowerDesc.includes('round')) {
       return this.createBasicCircle(description)
     }
-    
-    // Default: generate geometric shape based on description complexity
-    const complexity = Math.min(description.length / 20, 1)
-    const sides = Math.max(Math.floor(complexity * 8) + 3, 4)
-    
-    const points: Array<{x: number, y: number}> = []
-    const radius = 20
-    
-    for (let i = 0; i < sides; i++) {
-      const angle = (i / sides) * 2 * Math.PI
-      const x = Math.cos(angle) * radius
-      const y = Math.sin(angle) * radius
-      points.push({x, y})
-    }
-    
-    // Close the shape
-    points.push(points[0])
-    
-    return {
-      type: 'procedural-fallback',
-      description: description,
-      points: points,
-      metadata: {
-        source: 'procedural-fallback',
-        sides: sides,
-        complexity: complexity,
-        timestamp: Date.now()
+    if (lowerDesc.includes('butterfly')) {
+      return {
+        ...PresetShapes.butterfly(),
+        type: 'procedural-butterfly',
+        description,
+        metadata: { source: 'procedural-butterfly', timestamp: Date.now() }
       }
     }
+
+    throw new Error(`No recognizable fallback is available for "${description}"`)
   }
 
   // Basic shape generators for fallback

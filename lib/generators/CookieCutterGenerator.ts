@@ -272,7 +272,10 @@ export class CookieCutterGenerator {
           ? addVertex(pathPoint, profileIndex, frame.outgoingNormal)
           : incomingRing[profileIndex]
       ))
-      rings.push(incomingRing, outgoingRing)
+      // Traverse the clipped corner from the next segment's offset back to the
+      // previous segment's offset. The opposite order makes the bevel faces
+      // cross each other at every concave notch.
+      rings.push(outgoingRing, incomingRing)
     }
 
     const addTriangle = (first: number, second: number, third: number) => {

@@ -10,6 +10,7 @@ import {
 } from '@/lib/geometry/outline'
 
 export const runtime = 'nodejs'
+export const maxDuration = 30
 
 const categories = [
   'animal',
@@ -36,7 +37,7 @@ const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000
 const RATE_LIMIT_MAX_REQUESTS = 10
 const MAX_BODY_BYTES = 2_048
 const MAX_DESCRIPTION_LENGTH = 200
-const MAX_GENERATION_ATTEMPTS = 3
+const MAX_GENERATION_ATTEMPTS = 2
 const PROFESSIONAL_PROFILE_OFFSETS_MM = [6.35, -2.79] as const
 
 const globalForRateLimit = globalThis as typeof globalThis & {
@@ -142,7 +143,7 @@ function validateShape(value: unknown): ShapeResponse {
     throw new Error('Model returned an outline with no usable area')
   }
 
-  const normalizedPoints = normalizeOutline(distinctPoints, 50)
+  const normalizedPoints = normalizeOutline(distinctPoints, 75)
   if (hasOffsetSelfIntersections(normalizedPoints, PROFESSIONAL_PROFILE_OFFSETS_MM)) {
     throw new Error('Model returned an outline without enough wall clearance')
   }
@@ -206,7 +207,7 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Shape generation is temporarily unavailable' }, { status: 503 })
   }
 
-  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
+  const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini'
   const subjectHint = getSubjectHint(description)
 
   try {

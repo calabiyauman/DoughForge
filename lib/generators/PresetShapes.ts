@@ -117,15 +117,29 @@ export class PresetShapes {
   }
 
   static butterfly(): Shape {
-    const points: ShapePoint[] = []
-    
-    // Simplified butterfly shape using mathematical curves
-    for (let t = 0; t <= 2 * Math.PI; t += 0.05) {
-      const x = Math.sin(t) * (Math.exp(Math.cos(t)) - 2 * Math.cos(4*t) - Math.pow(Math.sin(t/12), 5))
-      const y = Math.cos(t) * (Math.exp(Math.cos(t)) - 2 * Math.cos(4*t) - Math.pow(Math.sin(t/12), 5))
-      points.push({ x: x * 8, y: y * 8 })
-    }
+    // A single, non-self-intersecting exterior silhouette with four broad wing
+    // lobes. The former parametric butterfly curve crossed through its center.
+    const points: ShapePoint[] = [
+      { x: 0, y: 20 },
+      { x: -14, y: 26 },
+      { x: -30, y: 30 },
+      { x: -37, y: 15 },
+      { x: -25, y: 0 },
+      { x: -35, y: -15 },
+      { x: -25, y: -30 },
+      { x: -12, y: -24 },
+      { x: 0, y: -12 },
+      { x: 12, y: -24 },
+      { x: 25, y: -30 },
+      { x: 35, y: -15 },
+      { x: 25, y: 0 },
+      { x: 37, y: 15 },
+      { x: 30, y: 30 },
+      { x: 14, y: 26 },
+      { x: 0, y: 20 }
+    ]
 
     return { type: 'preset', subtype: 'butterfly', points }
   }
 }
+
