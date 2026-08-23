@@ -99,7 +99,11 @@ export function minimumNonAdjacentSegmentDistance(points: readonly Point2D[]): n
 
     for (let second = first + 1; second < length; second += 1) {
       const secondNext = (second + 1) % length
-      if (firstNext === second || secondNext === first) continue
+      const separation = Math.min(second - first, length - (second - first))
+      // Edges within two steps belong to the same local corner or curve. Their
+      // clearance is handled by the sweep join; only separated outline regions
+      // can form a pinched channel with colliding walls.
+      if (separation <= 2 || firstNext === second || secondNext === first) continue
 
       const firstStart = points[first]
       const firstEnd = points[firstNext]
