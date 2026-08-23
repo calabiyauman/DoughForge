@@ -37,7 +37,7 @@ const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000
 const RATE_LIMIT_MAX_REQUESTS = 10
 const MAX_BODY_BYTES = 2_048
 const MAX_DESCRIPTION_LENGTH = 200
-const MAX_GENERATION_ATTEMPTS = 3
+const MAX_GENERATION_ATTEMPTS = 2
 const PROFESSIONAL_PROFILE_OFFSETS_MM = [6.35, -2.79] as const
 
 const globalForRateLimit = globalThis as typeof globalThis & {
@@ -207,7 +207,7 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Shape generation is temporarily unavailable' }, { status: 503 })
   }
 
-  const model = process.env.OPENAI_MODEL || 'gpt-5-mini'
+  const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini'
   const subjectHint = getSubjectHint(description)
 
   try {
