@@ -206,7 +206,7 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Shape generation is temporarily unavailable' }, { status: 503 })
   }
 
-  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
+  const model = process.env.OPENAI_MODEL || 'gpt-5-mini'
   const subjectHint = getSubjectHint(description)
 
   try {
