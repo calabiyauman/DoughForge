@@ -194,12 +194,12 @@ export function createOffsetOutline(
     if (offset > 0 && turn < 0) {
       offsetPoints.push(
         {
-          x: current.x + incomingNormal.x * offset,
-          y: current.y + incomingNormal.y * offset
-        },
-        {
           x: current.x + outgoingNormal.x * offset,
           y: current.y + outgoingNormal.y * offset
+        },
+        {
+          x: current.x + incomingNormal.x * offset,
+          y: current.y + incomingNormal.y * offset
         }
       )
       continue
