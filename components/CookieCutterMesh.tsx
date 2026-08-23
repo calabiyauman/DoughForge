@@ -72,7 +72,7 @@ export default function CookieCutterMesh({ geometry, wireframe = false }: Cookie
       geometry={threeGeometry}
       material={material}
       castShadow
-      receiveShadow
+      receiveShadow={false}
       scale={[1, 1, 1]}
     />
   )
