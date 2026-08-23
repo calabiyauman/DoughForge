@@ -1,9 +1,7 @@
 /**
  * AI Shape Generator - Creates cookie cutter outlines from text descriptions
- * Uses OpenAI API to generate unlimited, high-quality SVG paths
+ * Calls the server-side shape API and falls back to local procedural shapes.
  */
-
-import OpenAI from 'openai'
 
 interface AIShapeResponse {
   points: Array<{x: number, y: number}>
@@ -12,22 +10,6 @@ interface AIShapeResponse {
 }
 
 export class AIShapeGenerator {
-  private static openai: OpenAI | null = null
-
-  private static getOpenAI(): OpenAI {
-    if (!this.openai) {
-      const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY
-      if (!apiKey) {
-        throw new Error('OpenAI API key not found. Please set NEXT_PUBLIC_OPENAI_API_KEY environment variable.')
-      }
-      this.openai = new OpenAI({
-        apiKey: apiKey,
-        dangerouslyAllowBrowser: true
-      })
-    }
-    return this.openai
-  }
-
   static async generateFromDescription(description: string): Promise<any> {
     const cleanDescription = description.trim()
     console.log('🤖 OpenAI generating shape for:', cleanDescription)
@@ -47,72 +29,18 @@ export class AIShapeGenerator {
   }
 
   private static async generateWithOpenAI(description: string): Promise<any> {
-    const openai = this.getOpenAI()
-
-    const prompt = `Create a cookie cutter outline for: "${description}"
-
-REQUIREMENTS:
-- Simple, recognizable silhouette suitable for cutting dough
-- Closed path with NO gaps or holes
-- Centered at origin (0,0)
-- All coordinates between -30 and +30
-- 15-30 points for optimal detail
-- Clockwise path tracing outer edge
-- First point = last point (closed)
-- Smooth transitions between points
-- No internal details or thin features
-
-RESPOND WITH ONLY THE JSON OBJECT - NO OTHER TEXT.`
-
-    const response = await openai.chat.completions.create({
-      model: "gpt-4-turbo-preview",
-      messages: [
-        {
-          role: "system", 
-          content: "You are a skilled designer creating cookie cutter shapes. You MUST respond with ONLY a valid JSON object in this EXACT format:\n\n{\n  \"points\": [{\"x\": number, \"y\": number}, {\"x\": number, \"y\": number}, ...],\n  \"reasoning\": \"Brief explanation of design choices\",\n  \"category\": \"animal|nature|object|food|holiday|abstract|vehicle|character\"\n}\n\nRULES:\n- points: Array of 15-30 coordinate objects forming a closed path\n- Each point: {\"x\": number, \"y\": number} where numbers are between -30 and +30\n- First and last points MUST be identical to close the shape\n- Path traces clockwise around the outer edge\n- reasoning: 1-2 sentences explaining design decisions\n- category: Must be one of the listed options\n- NO additional text, explanations, or markdown - ONLY the JSON object"
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      temperature: 0.7,
-      max_tokens: 1000
+    const response = await fetch('/api/generate-shape', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description })
     })
 
-    const content = response.choices[0]?.message?.content
-    if (!content) {
-      throw new Error('No response from OpenAI')
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => null)
+      throw new Error(errorBody?.error || `Shape generation failed (${response.status})`)
     }
 
-    // Parse the JSON response
-    let aiData: AIShapeResponse
-    try {
-      // Clean the response - remove any markdown, extra text, or formatting
-      let cleanContent = content.trim()
-      
-      // Remove markdown code blocks if present
-      cleanContent = cleanContent.replace(/```json\s*/g, '').replace(/```\s*/g, '')
-      
-      // Extract JSON object (find the first complete JSON object)
-      const jsonMatch = cleanContent.match(/\{[\s\S]*?\}(?=\s*$|$)/)
-      if (!jsonMatch) {
-        throw new Error('No valid JSON object found in response')
-      }
-      
-      // Parse the JSON
-      aiData = JSON.parse(jsonMatch[0])
-      
-      // Validate required fields exist
-      if (!aiData.points || !aiData.reasoning || !aiData.category) {
-        throw new Error('Missing required fields in JSON response')
-      }
-      
-    } catch (parseError) {
-      console.error('Failed to parse OpenAI response:', content)
-      console.error('Parse error:', parseError)
-      throw new Error(`Invalid JSON response from OpenAI: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`)
-    }
+    const aiData = await response.json() as AIShapeResponse & { model?: string }
 
     // Validate the response structure
     if (!aiData.points || !Array.isArray(aiData.points) || aiData.points.length < 3) {
@@ -159,12 +87,12 @@ RESPOND WITH ONLY THE JSON OBJECT - NO OTHER TEXT.`
       description: description,
       points: aiData.points,
       metadata: {
-        source: 'openai-gpt4',
+        source: 'openai-server',
         reasoning: aiData.reasoning || 'AI-generated design',
         category: aiData.category || 'unknown',
         pointCount: aiData.points.length,
         timestamp: Date.now(),
-        model: 'gpt-4-turbo-preview'
+        model: aiData.model || 'server-configured'
       }
     }
 
@@ -289,3 +217,4 @@ RESPOND WITH ONLY THE JSON OBJECT - NO OTHER TEXT.`
     }
   }
 }
+
