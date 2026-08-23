@@ -96,6 +96,19 @@ function checkRateLimit(key: string): { allowed: boolean; retryAfter: number } {
   return { allowed: true, retryAfter: 0 }
 }
 
+function getSubjectHint(description: string): string {
+  if (/\bbutterfl(?:y|ies)\b/i.test(description)) {
+    return [
+      'For a butterfly, use bilateral left-right symmetry.',
+      'Show two large rounded upper wings and two smaller rounded lower wings.',
+      'Separate the four wing lobes with shallow exterior clefts and keep the center broad.',
+      'Do not create an interior body loop or a bow-tie polygon.'
+    ].join(' ')
+  }
+
+  return ''
+}
+
 function validateShape(value: unknown): ShapeResponse {
   if (!value || typeof value !== 'object') {
     throw new Error('Model returned an invalid shape')
@@ -194,6 +207,7 @@ export async function POST(request: Request) {
   }
 
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
+  const subjectHint = getSubjectHint(description)
 
   try {
     const openai = new OpenAI({ apiKey })
@@ -210,6 +224,9 @@ export async function POST(request: Request) {
             'Return one recognizable closed clockwise outline centered near the origin.',
             'Avoid holes, internal details, self-intersections, narrow bridges, and tiny features.',
             'Trace only the single exterior silhouette; never draw interior body or wing details.',
+            'The outline alone must unmistakably communicate the requested subject.',
+            'Exaggerate two to four iconic silhouette features at a large printable scale.',
+            'Never substitute a generic circle, box, polygon, or featureless blob.',
             'Make concave notches shallow and broad, with no pinched waist or sharp inward spike.',
             'Keep opposing non-adjacent boundary segments at least 14 coordinate units apart.',
             'Use 12 to 32 distinct boundary vertices and use most of the -25 to 25 coordinate range.',
@@ -218,6 +235,7 @@ export async function POST(request: Request) {
           ].join(' '),
           input: [
             `Create a recognizable cookie-cutter outline for: ${description}`,
+            subjectHint,
             attempt > 0
               ? 'The previous outline was rejected as physically unprintable. Make this version simpler, broader, and less concave.'
               : ''
