@@ -55,8 +55,9 @@ function CameraFitter({
     if (!(camera instanceof THREE.PerspectiveCamera) || vertices.length < 3) return
 
     const bounds = new THREE.Box3()
+    const point = new THREE.Vector3()
     for (let index = 0; index < vertices.length; index += 3) {
-      bounds.expandByPoint(new THREE.Vector3(
+      bounds.expandByPoint(point.set(
         vertices[index],
         vertices[index + 1],
         vertices[index + 2]

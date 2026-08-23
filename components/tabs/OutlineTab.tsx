@@ -91,7 +91,10 @@ export default function OutlineTab() {
       if (outline) {
         // Use the context's loadSVGOutline to update and regenerate
         loadSVGOutline(outline)
-        setStatus(`Generated AI shape: "${aiDescription.trim()}"`)
+        const source = outline.metadata?.source
+        setStatus(source === 'openai-server'
+          ? `Generated AI shape: "${aiDescription.trim()}"`
+          : `Generated printable fallback for: "${aiDescription.trim()}"`)
       } else {
         setStatus('Error: Could not generate shape from description')
       }

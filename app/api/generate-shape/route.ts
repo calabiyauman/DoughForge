@@ -10,6 +10,7 @@ import {
 } from '@/lib/geometry/outline'
 
 export const runtime = 'nodejs'
+export const maxDuration = 30
 
 const categories = [
   'animal',
