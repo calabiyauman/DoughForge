@@ -238,7 +238,9 @@ export async function POST(request: Request) {
       let traceError: unknown
       for (const closingRadius of [0, 4, 8, 12, 18, 24, 30]) {
         try {
-          const tracedPoints = tracePngSilhouette(imageBuffer, 75, closingRadius)
+          // Keep traced coordinates inside the structured-vector validator's
+          // input range; validateShape performs the single final 75 mm scale.
+          const tracedPoints = tracePngSilhouette(imageBuffer, 55, closingRadius)
           shape = validateShape({
             points: tracedPoints,
             reasoning: 'Generated as a high-resolution silhouette, then traced and print-validated.',
