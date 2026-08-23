@@ -74,12 +74,7 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const updateParameters = useCallback((params: Partial<CookieCutterState['parameters']>) => {
-    console.log(`🔧 updateParameters called with:`, params)
-    console.log(`🔧 Current outline before update:`, state.outline?.type || 'none')
-    
     setState(prev => {
-      console.log(`🔧 setState in updateParameters - prev outline:`, prev.outline?.type || 'none')
-      
       // If we have an outline and cookieCutter, regenerate immediately with new parameters
       if (prev.outline && prev.cookieCutter) {
         console.log(`🔧 Regenerating immediately with new parameters for ${prev.outline.type}`)
@@ -87,18 +82,7 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
         try {
           // Generate profile based on new parameters
           const newParams = { ...prev.parameters, ...params }
-          let profile
-          if (newParams.profileType === 'professional') {
-            profile = ProfileGenerator.professional({
-              outerOffset: newParams.outerOffset,
-              outerHeight: newParams.outerHeight,
-              innerOffset: newParams.innerOffset,
-              innerHeight: newParams.innerHeight,
-              chamfer: newParams.chamfer,
-            })
-          } else {
-            profile = ProfileGenerator.generate(newParams.profileType)
-          }
+          const profile = ProfileGenerator.fromParameters(newParams)
 
           const cookieCutter = CookieCutterGenerator.generate({
             outline: prev.outline, // Keep the existing outline!
@@ -167,18 +151,7 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
 
       try {
         // Generate profile based on current parameters
-        let profile
-        if (currentState.parameters.profileType === 'professional') {
-          profile = ProfileGenerator.professional({
-            outerOffset: currentState.parameters.outerOffset,
-            outerHeight: currentState.parameters.outerHeight,
-            innerOffset: currentState.parameters.innerOffset,
-            innerHeight: currentState.parameters.innerHeight,
-            chamfer: currentState.parameters.chamfer,
-          })
-        } else {
-          profile = ProfileGenerator.generate(currentState.parameters.profileType)
-        }
+        const profile = ProfileGenerator.fromParameters(currentState.parameters)
 
         const cookieCutter = CookieCutterGenerator.generate({
           outline: currentState.outline, // Use the current outline directly
@@ -206,83 +179,60 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
 
   const loadPresetShape = useCallback((shape: string) => {
     try {
-      console.log(`🍪 Loading preset shape: ${shape}`)
-      console.log(`🍪 Current state when loading ${shape}:`, { 
-        hasOutline: !!state.outline, 
-        currentType: state.outline?.type,
-        hasCookieCutter: !!state.cookieCutter 
-      })
-      setStatus(`Generating ${shape} shape...`)
       const outline = PresetShapes.generate(shape)
-      console.log(`🍪 Generated outline for ${shape}:`, outline)
-      
-      // Update state with new outline and immediately generate cookie cutter
-      setState(prev => ({
-        ...prev,
-        outline: outline,
-        status: `Generating ${shape} cookie cutter...`
-      }))
-      
-      // Generate cookie cutter with the new outline
-      setTimeout(() => {
-        console.log(`🍪 Triggering generateCookieCutter for ${shape}`)
-        
-        // Generate using functional state update to avoid stale closures
-        setState(currentState => {
-          console.log(`🍪 Generating ${shape} with current parameters`)
-          
-          const profile = ProfileGenerator.professional({
-            outerOffset: currentState.parameters.outerOffset,
-            outerHeight: currentState.parameters.outerHeight,
-            innerOffset: currentState.parameters.innerOffset,
-            innerHeight: currentState.parameters.innerHeight,
-            chamfer: currentState.parameters.chamfer,
-          })
-
-          const cookieCutter = CookieCutterGenerator.generate({
-            outline: outline,
-            profile,
-            scale: currentState.parameters.scale,
-            optimize: currentState.parameters.optimizePrinting,
-            smoothCorners: currentState.parameters.smoothCorners,
-            cornerRadius: currentState.parameters.cornerRadius,
-            angleThreshold: currentState.parameters.angleThreshold,
-          })
-          
-          console.log(`🍪 Successfully generated ${shape} cookie cutter`)
-
-          return {
-            ...currentState,
-            cookieCutter,
-            profile,
-            outline: outline,
-            status: `Generated ${shape} cookie cutter successfully`
-          }
+      setState(currentState => {
+        const profile = ProfileGenerator.fromParameters(currentState.parameters)
+        const cookieCutter = CookieCutterGenerator.generate({
+          outline,
+          profile,
+          scale: currentState.parameters.scale,
+          optimize: currentState.parameters.optimizePrinting,
+          smoothCorners: currentState.parameters.smoothCorners,
+          cornerRadius: currentState.parameters.cornerRadius,
+          angleThreshold: currentState.parameters.angleThreshold,
         })
-      }, 100)
-      
+
+        return {
+          ...currentState,
+          outline,
+          profile,
+          cookieCutter,
+          status: `Generated ${shape} cookie cutter successfully`
+        }
+      })
     } catch (error) {
       console.error('Error generating preset shape:', error)
       setStatus('Error generating shape')
     }
-  }, [state.parameters])
+  }, [setStatus])
 
   const loadSVGOutline = useCallback((outline: any) => {
     try {
-      setStatus('Processing SVG outline...')
-      setOutline(outline)
-      
-      // Automatically regenerate cookie cutter with new outline
-      setTimeout(() => {
-        generateCookieCutter()
-      }, 100)
-      
-      setStatus('SVG outline loaded successfully')
+      setState(currentState => {
+        const profile = ProfileGenerator.fromParameters(currentState.parameters)
+        const cookieCutter = CookieCutterGenerator.generate({
+          outline,
+          profile,
+          scale: currentState.parameters.scale,
+          optimize: currentState.parameters.optimizePrinting,
+          smoothCorners: currentState.parameters.smoothCorners,
+          cornerRadius: currentState.parameters.cornerRadius,
+          angleThreshold: currentState.parameters.angleThreshold,
+        })
+
+        return {
+          ...currentState,
+          outline,
+          profile,
+          cookieCutter,
+          status: 'Outline loaded successfully'
+        }
+      })
     } catch (error) {
       console.error('Error loading SVG outline:', error)
       setStatus('Error loading SVG outline')
     }
-  }, [generateCookieCutter, setOutline, setStatus])
+  }, [setStatus])
 
   // Generate initial cookie cutter on mount (only once ever)
   useEffect(() => {
@@ -298,7 +248,7 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
     } else {
       console.log('🍪 Already initialized, skipping heart load')
     }
-  }, []) // No dependencies to prevent any re-triggering
+  }, [loadPresetShape])
 
   // TEMPORARILY DISABLED - testing if this useEffect causes the issue
   // Regenerate when parameters change (but only if we have an outline)
@@ -322,18 +272,7 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
           
           try {
             // Generate profile based on current parameters
-            let profile
-            if (currentState.parameters.profileType === 'professional') {
-              profile = ProfileGenerator.professional({
-                outerOffset: currentState.parameters.outerOffset,
-                outerHeight: currentState.parameters.outerHeight,
-                innerOffset: currentState.parameters.innerOffset,
-                innerHeight: currentState.parameters.innerHeight,
-                chamfer: currentState.parameters.chamfer,
-              })
-            } else {
-              profile = ProfileGenerator.generate(currentState.parameters.profileType)
-            }
+            const profile = ProfileGenerator.fromParameters(currentState.parameters)
 
             const cookieCutter = CookieCutterGenerator.generate({
               outline: currentState.outline, // Use the current outline directly
@@ -395,7 +334,7 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
       console.error('Error exporting STL:', error)
       setStatus('Error exporting STL')
     }
-  }, [state.cookieCutter])
+  }, [state.cookieCutter, setStatus])
 
   const exportOBJ = useCallback(() => {
     if (!state.cookieCutter) {
@@ -423,7 +362,7 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
       console.error('Error exporting OBJ:', error)
       setStatus('Error exporting OBJ')
     }
-  }, [state.cookieCutter])
+  }, [state.cookieCutter, setStatus])
 
   const contextValue: CookieCutterContextType = {
     ...state,
@@ -506,3 +445,4 @@ function generateOBJData(cookieCutter: any): string {
   
   return obj
 }
+

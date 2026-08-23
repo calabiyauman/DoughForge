@@ -1,5 +1,12 @@
 import OpenAI from 'openai'
 import { createHash } from 'crypto'
+import {
+  closeOutline,
+  cleanClosedOutline,
+  hasSelfIntersections,
+  normalizeOutline,
+  signedArea
+} from '@/lib/geometry/outline'
 
 export const runtime = 'nodejs'
 
@@ -42,8 +49,8 @@ const shapeSchema = {
   properties: {
     points: {
       type: 'array',
-      minItems: 15,
-      maxItems: 31,
+      minItems: 6,
+      maxItems: 49,
       items: {
         type: 'object',
         additionalProperties: false,
@@ -96,7 +103,7 @@ function validateShape(value: unknown): ShapeResponse {
     throw new Error('Model returned an invalid point array')
   }
 
-  const points = candidate.points.map((point) => {
+  const rawPoints = candidate.points.map((point) => {
     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
       throw new Error('Model returned invalid coordinates')
     }
@@ -106,11 +113,20 @@ function validateShape(value: unknown): ShapeResponse {
     }
   })
 
-  const first = points[0]
-  const last = points[points.length - 1]
-  if (Math.abs(first.x - last.x) > 0.1 || Math.abs(first.y - last.y) > 0.1) {
-    points.push({ ...first })
+  const distinctPoints = cleanClosedOutline(rawPoints, 0.01)
+  if (distinctPoints.length < 3) {
+    throw new Error('Model returned fewer than three distinct points')
   }
+
+  if (hasSelfIntersections(distinctPoints)) {
+    throw new Error('Model returned a self-intersecting outline')
+  }
+
+  if (Math.abs(signedArea(distinctPoints)) < 0.01) {
+    throw new Error('Model returned an outline with no usable area')
+  }
+
+  const points = closeOutline(normalizeOutline(distinctPoints, 50))
 
   if (typeof candidate.reasoning !== 'string' || !candidate.reasoning.trim()) {
     throw new Error('Model returned invalid reasoning')
@@ -180,9 +196,11 @@ export async function POST(request: Request) {
       safety_identifier: createHash('sha256').update(clientIp).digest('hex').slice(0, 64),
       instructions: [
         'You design simple cookie-cutter silhouettes.',
-        'Return one closed clockwise outline centered near the origin.',
+        'Return one recognizable closed clockwise outline centered near the origin.',
         'Avoid holes, internal details, self-intersections, narrow bridges, and tiny features.',
-        'The first and last points must be identical.'
+        'Use 12 to 32 distinct boundary vertices and use most of the -25 to 25 coordinate range.',
+        'Do not pad the result with duplicate vertices.',
+        'The first and last points must be identical and no other consecutive points may repeat.'
       ].join(' '),
       input: `Create a recognizable cookie-cutter outline for: ${description}`,
       max_output_tokens: 1_200,

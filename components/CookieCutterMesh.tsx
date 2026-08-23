@@ -1,8 +1,7 @@
 'use client'
 
-import { useRef, useMemo } from 'react'
+import { useEffect, useRef, useMemo } from 'react'
 import { Mesh } from 'three'
-import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 
 interface CookieCutterMeshProps {
@@ -30,17 +29,16 @@ export default function CookieCutterMesh({ geometry, wireframe = false }: Cookie
     geo.computeVertexNormals()
     geo.computeBoundingBox()
     geo.computeBoundingSphere()
-    
+
+    if (geo.boundingBox) {
+      const center = geo.boundingBox.getCenter(new THREE.Vector3())
+      geo.translate(-center.x, -center.y, -center.z)
+    }
+
     return geo
   }, [geometry])
 
-  // Center the geometry
-  useMemo(() => {
-    if (threeGeometry.boundingBox) {
-      const center = threeGeometry.boundingBox.getCenter(new THREE.Vector3())
-      threeGeometry.translate(-center.x, -center.y, -center.z)
-    }
-  }, [threeGeometry])
+  useEffect(() => () => threeGeometry.dispose(), [threeGeometry])
 
   // Material based on wireframe mode
   const material = useMemo(() => {
@@ -56,12 +54,14 @@ export default function CookieCutterMesh({ geometry, wireframe = false }: Cookie
       color: 0xf0f0f0,
       roughness: 0.3,
       metalness: 0.1,
-      transparent: true,
-      opacity: 0.95,
+      transparent: false,
+      opacity: 1,
       side: THREE.DoubleSide,
       envMapIntensity: 0.5,
     })
   }, [wireframe])
+
+  useEffect(() => () => material.dispose(), [material])
 
   // Keep mesh static to avoid shadow flickering
   // Removed floating animation to prevent shadow movement
@@ -72,8 +72,9 @@ export default function CookieCutterMesh({ geometry, wireframe = false }: Cookie
       geometry={threeGeometry}
       material={material}
       castShadow
-      receiveShadow
+      receiveShadow={false}
       scale={[1, 1, 1]}
     />
   )
 }
+
