@@ -3,6 +3,7 @@ import { createHash } from 'crypto'
 import {
   closeOutline,
   cleanClosedOutline,
+  hasOffsetSelfIntersections,
   hasSelfIntersections,
   normalizeOutline,
   signedArea
@@ -35,6 +36,8 @@ const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000
 const RATE_LIMIT_MAX_REQUESTS = 10
 const MAX_BODY_BYTES = 2_048
 const MAX_DESCRIPTION_LENGTH = 200
+const MAX_GENERATION_ATTEMPTS = 3
+const PROFESSIONAL_PROFILE_OFFSETS_MM = [6.35, -2.79] as const
 
 const globalForRateLimit = globalThis as typeof globalThis & {
   doughForgeRateLimits?: Map<string, RateLimitEntry>
@@ -93,6 +96,19 @@ function checkRateLimit(key: string): { allowed: boolean; retryAfter: number } {
   return { allowed: true, retryAfter: 0 }
 }
 
+function getSubjectHint(description: string): string {
+  if (/\bbutterfl(?:y|ies)\b/i.test(description)) {
+    return [
+      'For a butterfly, use bilateral left-right symmetry.',
+      'Show two large rounded upper wings and two smaller rounded lower wings.',
+      'Separate the four wing lobes with shallow exterior clefts and keep the center broad.',
+      'Do not create an interior body loop or a bow-tie polygon.'
+    ].join(' ')
+  }
+
+  return ''
+}
+
 function validateShape(value: unknown): ShapeResponse {
   if (!value || typeof value !== 'object') {
     throw new Error('Model returned an invalid shape')
@@ -126,7 +142,11 @@ function validateShape(value: unknown): ShapeResponse {
     throw new Error('Model returned an outline with no usable area')
   }
 
-  const points = closeOutline(normalizeOutline(distinctPoints, 50))
+  const normalizedPoints = normalizeOutline(distinctPoints, 50)
+  if (hasOffsetSelfIntersections(normalizedPoints, PROFESSIONAL_PROFILE_OFFSETS_MM)) {
+    throw new Error('Model returned an outline without enough wall clearance')
+  }
+  const points = closeOutline(normalizedPoints)
 
   if (typeof candidate.reasoning !== 'string' || !candidate.reasoning.trim()) {
     throw new Error('Model returned invalid reasoning')
@@ -187,42 +207,65 @@ export async function POST(request: Request) {
   }
 
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
+  const subjectHint = getSubjectHint(description)
 
   try {
     const openai = new OpenAI({ apiKey })
-    const response = await openai.responses.create({
-      model,
-      store: false,
-      safety_identifier: createHash('sha256').update(clientIp).digest('hex').slice(0, 64),
-      instructions: [
-        'You design simple cookie-cutter silhouettes.',
-        'Return one recognizable closed clockwise outline centered near the origin.',
-        'Avoid holes, internal details, self-intersections, narrow bridges, and tiny features.',
-        'Use 12 to 32 distinct boundary vertices and use most of the -25 to 25 coordinate range.',
-        'Do not pad the result with duplicate vertices.',
-        'The first and last points must be identical and no other consecutive points may repeat.'
-      ].join(' '),
-      input: `Create a recognizable cookie-cutter outline for: ${description}`,
-      max_output_tokens: 1_200,
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'cookie_cutter_outline',
-          strict: true,
-          schema: shapeSchema
-        }
-      }
-    })
+    let lastError: unknown
 
-    if (!response.output_text) {
-      throw new Error('OpenAI returned no structured output')
+    for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt += 1) {
+      try {
+        const response = await openai.responses.create({
+          model,
+          store: false,
+          safety_identifier: createHash('sha256').update(clientIp).digest('hex').slice(0, 64),
+          instructions: [
+            'You design simple cookie-cutter silhouettes.',
+            'Return one recognizable closed clockwise outline centered near the origin.',
+            'Avoid holes, internal details, self-intersections, narrow bridges, and tiny features.',
+            'Trace only the single exterior silhouette; never draw interior body or wing details.',
+            'The outline alone must unmistakably communicate the requested subject.',
+            'Exaggerate two to four iconic silhouette features at a large printable scale.',
+            'Never substitute a generic circle, box, polygon, or featureless blob.',
+            'Make concave notches shallow and broad, with no pinched waist or sharp inward spike.',
+            'Keep opposing non-adjacent boundary segments at least 14 coordinate units apart.',
+            'Use 12 to 32 distinct boundary vertices and use most of the -25 to 25 coordinate range.',
+            'Do not pad the result with duplicate vertices.',
+            'The first and last points must be identical and no other consecutive points may repeat.'
+          ].join(' '),
+          input: [
+            `Create a recognizable cookie-cutter outline for: ${description}`,
+            subjectHint,
+            attempt > 0
+              ? 'The previous outline was rejected as physically unprintable. Make this version simpler, broader, and less concave.'
+              : ''
+          ].filter(Boolean).join(' '),
+          max_output_tokens: 1_200,
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'cookie_cutter_outline',
+              strict: true,
+              schema: shapeSchema
+            }
+          }
+        })
+
+        if (!response.output_text) {
+          throw new Error('OpenAI returned no structured output')
+        }
+
+        const shape = validateShape(JSON.parse(response.output_text))
+        return Response.json(
+          { ...shape, model },
+          { headers: { 'Cache-Control': 'no-store' } }
+        )
+      } catch (error) {
+        lastError = error
+      }
     }
 
-    const shape = validateShape(JSON.parse(response.output_text))
-    return Response.json(
-      { ...shape, model },
-      { headers: { 'Cache-Control': 'no-store' } }
-    )
+    throw lastError
   } catch (error) {
     console.error('OpenAI shape generation failed', error)
     return Response.json({ error: 'AI generation failed. Please try again.' }, { status: 502 })
