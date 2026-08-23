@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { deflateSync } from 'node:zlib'
 import { CookieCutterGenerator } from '../lib/generators/CookieCutterGenerator'
 import { ProfileGenerator } from '../lib/generators/ProfileGenerator'
 import { PresetShapes } from '../lib/generators/PresetShapes'
@@ -9,6 +10,44 @@ import {
   hasSelfIntersections,
   normalizeOutline
 } from '../lib/geometry/outline'
+import { tracePngSilhouette } from '../lib/geometry/pngSilhouette'
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const chunk = Buffer.alloc(data.length + 12)
+  chunk.writeUInt32BE(data.length, 0)
+  chunk.write(type, 4, 4, 'ascii')
+  data.copy(chunk, 8)
+  return chunk
+}
+
+function createTestSilhouettePng(): Buffer {
+  const width = 64
+  const height = 64
+  const rows = Buffer.alloc((width + 1) * height, 255)
+  for (let y = 0; y < height; y += 1) rows[y * (width + 1)] = 0
+  const fill = (left: number, top: number, right: number, bottom: number) => {
+    for (let y = top; y < bottom; y += 1) {
+      for (let x = left; x < right; x += 1) rows[y * (width + 1) + 1 + x] = 0
+    }
+  }
+  fill(8, 8, 30, 28)
+  fill(34, 8, 56, 28)
+  fill(14, 34, 30, 54)
+  fill(34, 34, 50, 54)
+  fill(27, 18, 37, 58)
+
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(width, 0)
+  header.writeUInt32BE(height, 4)
+  header[8] = 8
+  header[9] = 0
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk('IHDR', header),
+    pngChunk('IDAT', deflateSync(rows)),
+    pngChunk('IEND', Buffer.alloc(0))
+  ])
+}
 
 const closedSquare = {
   points: [
@@ -198,7 +237,14 @@ test('concave AI outlines create a closed professional mesh without folded trian
 
 test('butterfly preset is a printable single exterior silhouette', () => {
   const butterfly = cleanClosedOutline(PresetShapes.butterfly().points)
+  const upperRightWing = butterfly.filter(({ x, y }) => x > 0 && y > 0)
+  const lowerRightWing = butterfly.filter(({ x, y }) => x > 0 && y < 0)
 
+  assert.ok(butterfly.length >= 30)
+  assert.ok(Math.max(...upperRightWing.map(({ x }) => x)) > 40)
+  assert.ok(Math.max(...lowerRightWing.map(({ x }) => x)) > 35)
+  assert.ok(Math.max(...butterfly.map(({ y }) => y)) >= 34)
+  assert.ok(Math.min(...butterfly.map(({ y }) => y)) <= -39)
   assert.equal(hasSelfIntersections(butterfly), false)
   assert.equal(hasOffsetSelfIntersections(butterfly, [6.35, -2.79]), false)
   assert.doesNotThrow(() => CookieCutterGenerator.generate({
@@ -206,5 +252,15 @@ test('butterfly preset is a printable single exterior silhouette', () => {
     profile: ProfileGenerator.professional(),
     smoothCorners: true
   }))
+})
+
+test('raster silhouettes trace into a normalized printable exterior outline', () => {
+  const outline = tracePngSilhouette(createTestSilhouettePng())
+
+  assert.ok(outline.length >= 12)
+  assert.equal(hasSelfIntersections(outline), false)
+  const width = Math.max(...outline.map(({ x }) => x)) - Math.min(...outline.map(({ x }) => x))
+  const height = Math.max(...outline.map(({ y }) => y)) - Math.min(...outline.map(({ y }) => y))
+  assert.equal(Math.max(width, height), 75)
 })
 
