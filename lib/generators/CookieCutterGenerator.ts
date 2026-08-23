@@ -34,6 +34,9 @@ export interface PathPoint {
 interface PathFrame {
   normal: { x: number; z: number }
   miterScale: number
+  incomingNormal: { x: number; z: number }
+  outgoingNormal: { x: number; z: number }
+  concave: boolean
 }
 
 const EPSILON = 1e-6
@@ -196,7 +199,13 @@ export class CookieCutterGenerator {
       const summedLength = Math.hypot(summed.x, summed.z)
 
       if (summedLength <= EPSILON) {
-        return { normal: outgoingNormal, miterScale: 1 }
+        return {
+          normal: outgoingNormal,
+          miterScale: 1,
+          incomingNormal,
+          outgoingNormal,
+          concave: false
+        }
       }
 
       const normal = {
@@ -208,7 +217,12 @@ export class CookieCutterGenerator {
 
       return {
         normal,
-        miterScale: Math.max(-MITER_LIMIT, Math.min(MITER_LIMIT, rawMiterScale))
+        miterScale: Math.max(-MITER_LIMIT, Math.min(MITER_LIMIT, rawMiterScale)),
+        incomingNormal,
+        outgoingNormal,
+        concave: (
+          (incoming.x * outgoing.z - incoming.z * outgoing.x) * area < 0
+        )
       }
     })
   }
@@ -219,35 +233,74 @@ export class CookieCutterGenerator {
   ): Geometry {
     const vertices: number[] = []
     const faces: number[] = []
-    const pathLength = pathPoints.length
     const profileLength = profilePoints.length
     const frames = this.calculatePathFrames(pathPoints)
+    const rings: number[][] = []
 
-    for (let pathIndex = 0; pathIndex < pathLength; pathIndex += 1) {
+    const addVertex = (pathPoint: PathPoint, profileIndex: number, normal: { x: number; z: number }, offsetScale = 1) => {
+      const profilePoint = profilePoints[profileIndex]
+      const vertexIndex = vertices.length / 3
+      vertices.push(
+        pathPoint.x + profilePoint.x * offsetScale * normal.x,
+        profilePoint.y,
+        pathPoint.z + profilePoint.x * offsetScale * normal.z
+      )
+      return vertexIndex
+    }
+
+    for (let pathIndex = 0; pathIndex < pathPoints.length; pathIndex += 1) {
       const pathPoint = pathPoints[pathIndex]
       const frame = frames[pathIndex]
 
-      for (const profilePoint of profilePoints) {
-        const offset = profilePoint.x * frame.miterScale
-        vertices.push(
-          pathPoint.x + offset * frame.normal.x,
-          profilePoint.y,
-          pathPoint.z + offset * frame.normal.z
-        )
+      if (!frame.concave) {
+        rings.push(profilePoints.map((_, profileIndex) => (
+          addVertex(pathPoint, profileIndex, frame.normal, frame.miterScale)
+        )))
+        continue
+      }
+
+      // Expanding a concave corner with a miter folds the outer wall back through
+      // itself. Use two rings there: the outward half becomes a bevel while the
+      // inward cutting half keeps the exact miter intersection.
+      const incomingRing = profilePoints.map((profilePoint, profileIndex) => (
+        profilePoint.x > EPSILON
+          ? addVertex(pathPoint, profileIndex, frame.incomingNormal)
+          : addVertex(pathPoint, profileIndex, frame.normal, frame.miterScale)
+      ))
+      const outgoingRing = profilePoints.map((profilePoint, profileIndex) => (
+        profilePoint.x > EPSILON
+          ? addVertex(pathPoint, profileIndex, frame.outgoingNormal)
+          : incomingRing[profileIndex]
+      ))
+      rings.push(incomingRing, outgoingRing)
+    }
+
+    const addTriangle = (first: number, second: number, third: number) => {
+      if (first === second || second === third || first === third) return
+
+      const ax = vertices[second * 3] - vertices[first * 3]
+      const ay = vertices[second * 3 + 1] - vertices[first * 3 + 1]
+      const az = vertices[second * 3 + 2] - vertices[first * 3 + 2]
+      const bx = vertices[third * 3] - vertices[first * 3]
+      const by = vertices[third * 3 + 1] - vertices[first * 3 + 1]
+      const bz = vertices[third * 3 + 2] - vertices[first * 3 + 2]
+      const crossX = ay * bz - az * by
+      const crossY = az * bx - ax * bz
+      const crossZ = ax * by - ay * bx
+
+      if (Math.hypot(crossX, crossY, crossZ) > EPSILON) {
+        faces.push(first, second, third)
       }
     }
 
-    for (let pathIndex = 0; pathIndex < pathLength; pathIndex += 1) {
-      const nextPathIndex = (pathIndex + 1) % pathLength
+    for (let ringIndex = 0; ringIndex < rings.length; ringIndex += 1) {
+      const ring = rings[ringIndex]
+      const nextRing = rings[(ringIndex + 1) % rings.length]
 
       for (let profileIndex = 0; profileIndex < profileLength; profileIndex += 1) {
         const nextProfileIndex = (profileIndex + 1) % profileLength
-        const first = pathIndex * profileLength + profileIndex
-        const second = pathIndex * profileLength + nextProfileIndex
-        const third = nextPathIndex * profileLength + profileIndex
-        const fourth = nextPathIndex * profileLength + nextProfileIndex
-
-        faces.push(first, second, third, second, fourth, third)
+        addTriangle(ring[profileIndex], ring[nextProfileIndex], nextRing[profileIndex])
+        addTriangle(ring[nextProfileIndex], nextRing[nextProfileIndex], nextRing[profileIndex])
       }
     }
 

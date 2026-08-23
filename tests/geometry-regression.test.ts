@@ -136,3 +136,57 @@ test('AI outlines are deduplicated, normalized, and self-intersections are detec
   ]), true)
 })
 
+test('concave AI outlines create a closed professional mesh without folded triangles', () => {
+  const butterfly = {
+    points: [
+      { x: 0, y: 3.125 },
+      { x: -12.5, y: 15.625 },
+      { x: -18.75, y: 9.375 },
+      { x: -25, y: 3.125 },
+      { x: -18.75, y: -3.125 },
+      { x: -12.5, y: -9.375 },
+      { x: 0, y: -15.625 },
+      { x: 12.5, y: -9.375 },
+      { x: 18.75, y: -3.125 },
+      { x: 25, y: 3.125 },
+      { x: 18.75, y: 9.375 },
+      { x: 12.5, y: 15.625 },
+      { x: 0, y: 3.125 }
+    ]
+  }
+  const result = CookieCutterGenerator.generate({
+    outline: butterfly,
+    profile: ProfileGenerator.professional(),
+    smoothCorners: true
+  })
+  const { vertices, faces } = result.geometry
+  const edgeUses = new Map<string, number>()
+
+  assert.ok(vertices.every(Number.isFinite))
+
+  for (let index = 0; index < faces.length; index += 3) {
+    const triangle = [faces[index], faces[index + 1], faces[index + 2]]
+    const [first, second, third] = triangle.map((vertexIndex) => ({
+      x: vertices[vertexIndex * 3],
+      y: vertices[vertexIndex * 3 + 1],
+      z: vertices[vertexIndex * 3 + 2]
+    }))
+    const ab = { x: second.x - first.x, y: second.y - first.y, z: second.z - first.z }
+    const ac = { x: third.x - first.x, y: third.y - first.y, z: third.z - first.z }
+    const doubledArea = Math.hypot(
+      ab.y * ac.z - ab.z * ac.y,
+      ab.z * ac.x - ab.x * ac.z,
+      ab.x * ac.y - ab.y * ac.x
+    )
+    assert.ok(doubledArea > 1e-6)
+
+    for (let edge = 0; edge < 3; edge += 1) {
+      const pair = [triangle[edge], triangle[(edge + 1) % 3]].sort((a, b) => a - b)
+      const key = `${pair[0]}:${pair[1]}`
+      edgeUses.set(key, (edgeUses.get(key) ?? 0) + 1)
+    }
+  }
+
+  assert.ok([...edgeUses.values()].every((uses) => uses === 2))
+})
+

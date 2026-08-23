@@ -126,7 +126,9 @@ function validateShape(value: unknown): ShapeResponse {
     throw new Error('Model returned an outline with no usable area')
   }
 
-  const points = closeOutline(normalizeOutline(distinctPoints, 50))
+  // A wider default silhouette leaves enough physical room for the 9.14 mm
+  // professional profile around narrow necks and concave details.
+  const points = closeOutline(normalizeOutline(distinctPoints, 75))
 
   if (typeof candidate.reasoning !== 'string' || !candidate.reasoning.trim()) {
     throw new Error('Model returned invalid reasoning')
@@ -198,6 +200,9 @@ export async function POST(request: Request) {
         'You design simple cookie-cutter silhouettes.',
         'Return one recognizable closed clockwise outline centered near the origin.',
         'Avoid holes, internal details, self-intersections, narrow bridges, and tiny features.',
+        'Trace only the single exterior silhouette; never draw interior body or wing details.',
+        'Make concave notches shallow and broad, with no pinched waist or sharp inward spike.',
+        'Keep every neck, channel, and gap at least 12 coordinate units wide.',
         'Use 12 to 32 distinct boundary vertices and use most of the -25 to 25 coordinate range.',
         'Do not pad the result with duplicate vertices.',
         'The first and last points must be identical and no other consecutive points may repeat.'
