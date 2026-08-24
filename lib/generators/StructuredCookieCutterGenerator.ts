@@ -12,8 +12,27 @@ import {
   type Geometry
 } from './CookieCutterGenerator'
 import type { Profile, ProfilePoint } from './ProfileGenerator'
+import {
+  extrudePlanarRegion,
+  extrudeStackedPlanarRegions,
+  normalizePlanarRegionSlabs,
+  type PlanarRegionSlab
+} from '../geometry/planarExtrusion'
+import {
+  createPlanarRegion,
+  intersectPlanarRegions,
+  offsetPlanarRegion,
+  planarPathSignedArea,
+  simplifyPlanarRegion,
+  subtractPlanarRegions,
+  strokePlanarPaths,
+  type PlanarRegion
+} from '../geometry/planarKernel'
+import { analyzeMesh } from '../geometry/meshValidation'
+import { sweepProfileOverPlanarRegion } from '../geometry/profiledPlanarSweep'
 
 const EPSILON = 1e-6
+const OPTIMIZATION_TOLERANCE = 0.01
 const IDENTITY_TRANSFORM: Transform2D = [1, 0, 0, 1, 0, 0]
 const DESIGN_ROLES: readonly DesignRole[] = ['cut', 'stamp', 'emboss', 'support', 'handle']
 
@@ -37,15 +56,54 @@ export interface Bounds3D {
 
 export interface GeneratedElementMetadata {
   id: string
+  sourceIds: string[]
+  assemblyId: string
+  partId: string
   kind: 'closed-contour' | 'open-stroke'
   role: DesignRole
+  height: number
+  thickness: number
+  minimumCrossSectionWidth?: number
+  profileBands?: number
+  maximumProfileError?: number
+  bounds: Bounds3D
+}
+
+export interface MeshQualityMetadata {
+  watertight: boolean
+  connectedComponents: number
+  boundaryEdges: number
+  nonManifoldEdges: number
+  inconsistentWindingEdges: number
+  degenerateTriangles: number
+  duplicateTriangles: number
+}
+
+export interface GeneratedAssemblyMetadata {
+  id: string
+  partIds: string[]
+  sourceIds: string[]
   vertexStart: number
   vertexCount: number
   triangleStart: number
   triangleCount: number
-  height: number
-  thickness: number
   bounds: Bounds3D
+  meshQuality: MeshQualityMetadata
+}
+
+export type ProductionReadinessReasonCode =
+  | 'skipped-elements'
+  | 'mesh-topology'
+  | 'disconnected-assembly'
+  | 'weak-attachment'
+  | 'manufacturing-constraints'
+  | 'cross-assembly-collision'
+  | 'multipart-export-unsupported'
+
+export interface ProductionReadinessReason {
+  code: ProductionReadinessReasonCode
+  message: string
+  assemblyId?: string
 }
 
 export interface StructuredGenerationMetadata {
@@ -59,6 +117,12 @@ export interface StructuredGenerationMetadata {
   roleHeights: Record<DesignRole, number>
   sourceBounds: Bounds2D
   elements: GeneratedElementMetadata[]
+  assemblies: GeneratedAssemblyMetadata[]
+  meshQuality: MeshQualityMetadata
+  productionReadiness: {
+    ready: boolean
+    reasons: ProductionReadinessReason[]
+  }
   warnings: string[]
 }
 
@@ -82,6 +146,26 @@ interface TransformedElement {
   source: ClosedContour | OpenStroke
   points: Point2D[]
   localWidthScale: number
+  assemblyId: string
+  partId: string
+  instanceId: string
+}
+
+type TransformedClosedElement = TransformedElement & {
+  source: ClosedContour
+}
+
+interface SolidContribution {
+  assemblyId: string
+  partId: string
+  sourceIds: string[]
+  slabs: PlanarRegionSlab[]
+  metadata: GeneratedElementMetadata
+}
+
+interface QuantizedPoint2D {
+  x: number
+  y: number
 }
 
 interface FitTransform {
@@ -582,6 +666,150 @@ function mergeGeometry(
   for (const faceIndex of geometry.faces) targetFaces.push(faceIndex + vertexOffset)
 }
 
+function summarizeMeshQuality(geometry: Geometry): MeshQualityMetadata {
+  const report = analyzeMesh(geometry)
+  return {
+    watertight: report.isWatertight,
+    connectedComponents: report.connectedComponentCount,
+    boundaryEdges: report.boundaryEdges.length,
+    nonManifoldEdges: report.nonManifoldEdges.length,
+    inconsistentWindingEdges: report.inconsistentlyOrientedEdges.length,
+    degenerateTriangles: report.degenerateTriangleIndices.length,
+    duplicateTriangles: report.duplicateTriangles.length
+  }
+}
+
+function slabCollectionsCollide(
+  first: readonly PlanarRegionSlab[],
+  second: readonly PlanarRegionSlab[]
+): boolean {
+  for (const firstSlab of first) {
+    for (const secondSlab of second) {
+      const verticalOverlap = Math.min(firstSlab.top, secondSlab.top)
+        - Math.max(firstSlab.bottom, secondSlab.bottom)
+      if (verticalOverlap <= EPSILON) continue
+      if (intersectPlanarRegions(firstSlab.region, secondSlab.region).paths.length > 0) {
+        return true
+      }
+      if (regionBoundariesIntersectOrTouch(firstSlab.region, secondSlab.region)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function contributionsHavePrintableAttachment(
+  first: SolidContribution,
+  second: SolidContribution,
+  minimumFeatureSize: number
+): boolean {
+  for (const firstSlab of first.slabs) {
+    for (const secondSlab of second.slabs) {
+      const verticalOverlap = Math.min(firstSlab.top, secondSlab.top)
+        - Math.max(firstSlab.bottom, secondSlab.bottom)
+      const verticalSeparation = -verticalOverlap
+      if (verticalSeparation > EPSILON) continue
+      const intersection = intersectPlanarRegions(firstSlab.region, secondSlab.region)
+      if (intersection.paths.length > 0) {
+        try {
+          const precisionAllowance = 1 / intersection.unitsPerMillimeter
+          const erosion = Math.max(
+            0,
+            minimumFeatureSize / 2 - precisionAllowance
+          )
+          if (erosion === 0) return true
+          const printableCore = offsetPlanarRegion(
+            intersection,
+            -erosion,
+            { join: 'miter', miterLimit: 4 }
+          )
+          if (printableCore.paths.length > 0) return true
+        } catch {
+          // A collapsed inward offset is intentionally treated as a weak bond.
+        }
+      }
+      if (
+        verticalOverlap + EPSILON >= minimumFeatureSize
+        && sharedRegionBoundaryLength(firstSlab.region, secondSlab.region) + EPSILON
+          >= minimumFeatureSize
+      ) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function countContributionAttachmentGroups(
+  contributions: readonly SolidContribution[],
+  minimumFeatureSize: number
+): number {
+  if (contributions.length === 0) return 0
+  const parent = contributions.map((_, index) => index)
+  const find = (index: number): number => {
+    if (parent[index] === index) return index
+    parent[index] = find(parent[index])
+    return parent[index]
+  }
+  const connect = (first: number, second: number): void => {
+    const firstRoot = find(first)
+    const secondRoot = find(second)
+    if (firstRoot !== secondRoot) parent[Math.max(firstRoot, secondRoot)] = Math.min(firstRoot, secondRoot)
+  }
+
+  for (let first = 0; first < contributions.length; first += 1) {
+    for (let second = first + 1; second < contributions.length; second += 1) {
+      if (contributionsHavePrintableAttachment(
+        contributions[first],
+        contributions[second],
+        minimumFeatureSize
+      )) {
+        connect(first, second)
+      }
+    }
+  }
+
+  return new Set(contributions.map((_, index) => find(index))).size
+}
+
+/**
+ * Verifies that the complete 3D assembly retains one connected structural
+ * core after every planar slice is eroded by half the minimum feature width.
+ * Auditing the full stack preserves alternate connections at other heights.
+ */
+function lacksPrintableStructuralCore(
+  slabs: readonly PlanarRegionSlab[],
+  minimumFeatureSize: number,
+  originalComponentCount: number
+): boolean {
+  if (slabs.length === 0 || originalComponentCount !== 1) return false
+  const precisionAllowance = 1 / slabs[0].region.unitsPerMillimeter
+  const erosion = Math.max(0, minimumFeatureSize / 2 - precisionAllowance)
+  if (erosion <= 0) return false
+
+  try {
+    const erodedSlabs = slabs.flatMap((slab): PlanarRegionSlab[] => {
+      const region = offsetPlanarRegion(
+        slab.region,
+        -erosion,
+        { join: 'round', miterLimit: 4 }
+      )
+      return region.paths.length > 0 ? [{ ...slab, region }] : []
+    })
+    if (erodedSlabs.length === 0) return true
+
+    const erodedGeometry = extrudeStackedPlanarRegions(erodedSlabs)
+    if (erodedGeometry.faces.length === 0) return true
+    const erodedQuality = analyzeMesh(erodedGeometry)
+    return !erodedQuality.isWatertight
+      || erodedQuality.connectedComponentCount !== 1
+  } catch {
+    // Offset or meshing failure means the printable core cannot be proven.
+    return true
+  }
+}
+
 function collectTransformedElements(design: DesignSpec): TransformedElement[] {
   const geometryById = new Map<string, ClosedContour | OpenStroke>()
   for (const contour of design.contours) geometryById.set(contour.id, contour)
@@ -607,13 +835,269 @@ function collectTransformedElements(design: DesignSpec): TransformedElement[] {
         elements.push({
           source,
           points: source.points.map((point) => applyTransform(point, transform)),
-          localWidthScale
+          localWidthScale,
+          assemblyId: assembly.id,
+          partId: part.id,
+          instanceId: `${assembly.id}/${part.id}`
         })
       }
     }
   }
 
   return elements
+}
+
+function quantizeRegionPath(
+  path: readonly Point2D[],
+  unitsPerMillimeter: number
+): QuantizedPoint2D[] {
+  return path.map((point) => ({
+    x: Math.round(point.x * unitsPerMillimeter),
+    y: Math.round(point.y * unitsPerMillimeter)
+  }))
+}
+
+function crossProduct(
+  first: QuantizedPoint2D,
+  second: QuantizedPoint2D,
+  third: QuantizedPoint2D
+): number {
+  return (second.x - first.x) * (third.y - first.y)
+    - (second.y - first.y) * (third.x - first.x)
+}
+
+function isPointOnSegment(
+  point: QuantizedPoint2D,
+  start: QuantizedPoint2D,
+  end: QuantizedPoint2D
+): boolean {
+  return crossProduct(start, end, point) === 0
+    && point.x >= Math.min(start.x, end.x)
+    && point.x <= Math.max(start.x, end.x)
+    && point.y >= Math.min(start.y, end.y)
+    && point.y <= Math.max(start.y, end.y)
+}
+
+function segmentsIntersectOrTouch(
+  firstStart: QuantizedPoint2D,
+  firstEnd: QuantizedPoint2D,
+  secondStart: QuantizedPoint2D,
+  secondEnd: QuantizedPoint2D
+): boolean {
+  if (
+    Math.max(firstStart.x, firstEnd.x) < Math.min(secondStart.x, secondEnd.x)
+    || Math.max(secondStart.x, secondEnd.x) < Math.min(firstStart.x, firstEnd.x)
+    || Math.max(firstStart.y, firstEnd.y) < Math.min(secondStart.y, secondEnd.y)
+    || Math.max(secondStart.y, secondEnd.y) < Math.min(firstStart.y, firstEnd.y)
+  ) {
+    return false
+  }
+
+  const firstSide = crossProduct(firstStart, firstEnd, secondStart)
+  const secondSide = crossProduct(firstStart, firstEnd, secondEnd)
+  const thirdSide = crossProduct(secondStart, secondEnd, firstStart)
+  const fourthSide = crossProduct(secondStart, secondEnd, firstEnd)
+
+  if (firstSide === 0 && isPointOnSegment(secondStart, firstStart, firstEnd)) return true
+  if (secondSide === 0 && isPointOnSegment(secondEnd, firstStart, firstEnd)) return true
+  if (thirdSide === 0 && isPointOnSegment(firstStart, secondStart, secondEnd)) return true
+  if (fourthSide === 0 && isPointOnSegment(firstEnd, secondStart, secondEnd)) return true
+
+  return (firstSide > 0) !== (secondSide > 0)
+    && (thirdSide > 0) !== (fourthSide > 0)
+}
+
+function regionBoundariesIntersectOrTouch(
+  first: PlanarRegion,
+  second: PlanarRegion
+): boolean {
+  if (first.unitsPerMillimeter !== second.unitsPerMillimeter) {
+    throw new Error('Cannot validate planar regions with different precision scales')
+  }
+
+  const firstPaths = first.paths.map((path) => (
+    quantizeRegionPath(path, first.unitsPerMillimeter)
+  ))
+  const secondPaths = second.paths.map((path) => (
+    quantizeRegionPath(path, second.unitsPerMillimeter)
+  ))
+
+  for (const firstPath of firstPaths) {
+    for (const secondPath of secondPaths) {
+      for (let firstIndex = 0; firstIndex < firstPath.length; firstIndex += 1) {
+        const firstStart = firstPath[firstIndex]
+        const firstEnd = firstPath[(firstIndex + 1) % firstPath.length]
+        for (let secondIndex = 0; secondIndex < secondPath.length; secondIndex += 1) {
+          const secondStart = secondPath[secondIndex]
+          const secondEnd = secondPath[(secondIndex + 1) % secondPath.length]
+          if (segmentsIntersectOrTouch(firstStart, firstEnd, secondStart, secondEnd)) {
+            return true
+          }
+        }
+      }
+    }
+  }
+
+  return false
+}
+
+function sharedRegionBoundaryLength(
+  first: PlanarRegion,
+  second: PlanarRegion
+): number {
+  if (first.unitsPerMillimeter !== second.unitsPerMillimeter) {
+    throw new Error('Cannot compare planar regions with different precision scales')
+  }
+  const unitsPerMillimeter = first.unitsPerMillimeter
+  const firstPaths = first.paths.map((path) => quantizeRegionPath(path, unitsPerMillimeter))
+  const secondPaths = second.paths.map((path) => quantizeRegionPath(path, unitsPerMillimeter))
+  let sharedLength = 0
+
+  for (const firstPath of firstPaths) {
+    for (const secondPath of secondPaths) {
+      for (let firstIndex = 0; firstIndex < firstPath.length; firstIndex += 1) {
+        const firstStart = firstPath[firstIndex]
+        const firstEnd = firstPath[(firstIndex + 1) % firstPath.length]
+        const directionX = firstEnd.x - firstStart.x
+        const directionY = firstEnd.y - firstStart.y
+        const squaredLength = directionX ** 2 + directionY ** 2
+        if (squaredLength === 0) continue
+
+        for (let secondIndex = 0; secondIndex < secondPath.length; secondIndex += 1) {
+          const secondStart = secondPath[secondIndex]
+          const secondEnd = secondPath[(secondIndex + 1) % secondPath.length]
+          if (
+            crossProduct(firstStart, firstEnd, secondStart) !== 0
+            || crossProduct(firstStart, firstEnd, secondEnd) !== 0
+          ) {
+            continue
+          }
+          const startProjection = (
+            (secondStart.x - firstStart.x) * directionX
+            + (secondStart.y - firstStart.y) * directionY
+          ) / squaredLength
+          const endProjection = (
+            (secondEnd.x - firstStart.x) * directionX
+            + (secondEnd.y - firstStart.y) * directionY
+          ) / squaredLength
+          const overlapStart = Math.max(0, Math.min(startProjection, endProjection))
+          const overlapEnd = Math.min(1, Math.max(startProjection, endProjection))
+          if (overlapEnd > overlapStart) {
+            sharedLength += (overlapEnd - overlapStart) * Math.sqrt(squaredLength)
+          }
+        }
+      }
+    }
+  }
+
+  return sharedLength / unitsPerMillimeter
+}
+
+function createContourRegion(element: TransformedClosedElement): PlanarRegion {
+  // A declared hole is built as positive clip material first. It is subtracted
+  // only from its referenced outer after strict containment has been verified.
+  const region = createPlanarRegion(
+    [{ points: element.points, kind: 'outer' }],
+    {
+      fillRule: element.source.fillRule,
+      repairSelfIntersections: true
+    }
+  )
+  if (region.paths.length === 0) {
+    throw new Error(`Contour "${element.source.id}" produced no planar area`)
+  }
+  return region
+}
+
+function unionResolvedRegions(regions: readonly PlanarRegion[]): PlanarRegion {
+  const unitsPerMillimeter = regions[0]?.unitsPerMillimeter ?? 1_000
+  for (const region of regions) {
+    if (region.unitsPerMillimeter !== unitsPerMillimeter) {
+      throw new Error('Cannot union planar regions with different precision scales')
+    }
+  }
+  return createPlanarRegion(
+    regions.flatMap((region) => region.paths.map((points) => ({
+      points,
+      kind: planarPathSignedArea(points) >= 0 ? 'outer' as const : 'hole' as const
+    }))),
+    { unitsPerMillimeter, fillRule: 'nonzero', repairSelfIntersections: true }
+  )
+}
+
+function applyCornerControls(
+  elements: readonly TransformedClosedElement[],
+  smoothCorners: boolean,
+  cornerRadius: number,
+  angleThreshold: number
+): TransformedClosedElement[] {
+  if (!smoothCorners || cornerRadius <= EPSILON) return elements.map((element) => ({ ...element }))
+
+  return elements.map((element) => ({
+    ...element,
+    points: CookieCutterGenerator.outlineToPath(
+      { points: element.points },
+      1,
+      { smoothCorners: true, cornerRadius, angleThreshold }
+    ).map((point) => ({ x: point.x, y: point.z }))
+  }))
+}
+
+function createClosedContourGroupRegion(
+  closedElements: readonly TransformedClosedElement[]
+): PlanarRegion {
+  const outerElements = closedElements.filter(
+    (element) => element.source.relationship.kind === 'outer'
+  )
+  if (outerElements.length === 0) {
+    throw new Error('Closed contour group does not contain an outer contour')
+  }
+
+  const outerById = new Map(
+    outerElements.map((element) => [element.source.id, element])
+  )
+  const holesByOuterId = new Map<string, TransformedClosedElement[]>()
+
+  for (const element of closedElements) {
+    if (element.source.relationship.kind !== 'hole') continue
+    const outerContourId = element.source.relationship.outerContourId
+    if (!outerById.has(outerContourId)) {
+      throw new Error(
+        `Hole "${element.source.id}" is separated from outer contour "${outerContourId}" by its role or part`
+      )
+    }
+    const holes = holesByOuterId.get(outerContourId) ?? []
+    holes.push(element)
+    holesByOuterId.set(outerContourId, holes)
+  }
+
+  const compounds = outerElements.map((outerElement) => {
+    const outerRegion = createContourRegion(outerElement)
+    const holeRegions = (holesByOuterId.get(outerElement.source.id) ?? []).map(
+      (holeElement) => {
+        const holeRegion = createContourRegion(holeElement)
+        const outside = subtractPlanarRegions(holeRegion, outerRegion)
+        if (
+          outside.paths.length > 0
+          || regionBoundariesIntersectOrTouch(holeRegion, outerRegion)
+        ) {
+          throw new Error(
+            `Hole "${holeElement.source.id}" lies outside or touches referenced outer contour "${outerElement.source.id}"`
+          )
+        }
+        return holeRegion
+      }
+    )
+
+    if (holeRegions.length === 0) return outerRegion
+    return subtractPlanarRegions(
+      outerRegion,
+      unionResolvedRegions(holeRegions),
+      'nonzero'
+    )
+  })
+
+  return unionResolvedRegions(compounds)
 }
 
 export class StructuredCookieCutterGenerator {
@@ -632,95 +1116,334 @@ export class StructuredCookieCutterGenerator {
     if (!Number.isFinite(scale) || scale <= 0) {
       throw new RangeError('Structured generator scale must be a finite number greater than zero')
     }
+    if (!Number.isFinite(cornerRadius) || cornerRadius < 0) {
+      throw new RangeError('cornerRadius must be a finite non-negative number')
+    }
+    if (!Number.isFinite(angleThreshold) || angleThreshold < 0 || angleThreshold > 180) {
+      throw new RangeError('angleThreshold must be a finite number from 0 to 180 degrees')
+    }
 
     const transformedElements = collectTransformedElements(design)
     const sourceBounds = boundsFromElements(design, transformedElements)
     const fit = createFitTransform(design, sourceBounds, scale)
+    const fittedElements = transformedElements.map((element) => ({
+      ...element,
+      points: element.points.map((point) => fitPoint(point, fit))
+    }))
     const roleDefinitions = createRoleDefinitions(design, profile)
     const roleCounts = createRoleCounts()
-    const vertices: number[] = []
-    const faces: number[] = []
     const elements: GeneratedElementMetadata[] = []
+    const contributions: SolidContribution[] = []
     const warnings: string[] = []
     let skippedElements = 0
+    let generatedElements = 0
+    const pendingElementIndices = new Set(fittedElements.map((_, index) => index))
 
-    for (const transformedElement of transformedElements) {
+    for (let elementIndex = 0; elementIndex < fittedElements.length; elementIndex += 1) {
+      if (!pendingElementIndices.delete(elementIndex)) continue
+      const transformedElement = fittedElements[elementIndex]
       const { source } = transformedElement
       const roleDefinition = roleDefinitions[source.role]
-      const fittedPoints = transformedElement.points.map((point) => fitPoint(point, fit))
+      const groupedElements = source.kind === 'closed-contour'
+        ? fittedElements.filter((candidate, candidateIndex) => {
+          if (candidateIndex === elementIndex) return true
+          if (!pendingElementIndices.has(candidateIndex)) return false
+          const matches = candidate.source.kind === 'closed-contour'
+            && candidate.instanceId === transformedElement.instanceId
+            && candidate.source.role === source.role
+          if (matches) pendingElementIndices.delete(candidateIndex)
+          return matches
+        })
+        : [transformedElement]
+      const sourceIds = groupedElements.map((element) => element.source.id)
 
       try {
         let geometry: Geometry
+        let slabs: PlanarRegionSlab[]
         let thickness = roleDefinition.thickness
+        let minimumCrossSectionWidth: number | undefined
+        let profileBands: number | undefined
+        let maximumProfileError: number | undefined
 
         if (source.kind === 'closed-contour') {
-          geometry = CookieCutterGenerator.generate({
-            outline: { points: fittedPoints },
-            profile: roleDefinition.profile,
-            scale: 1,
-            optimize,
+          const closedElements = applyCornerControls(
+            groupedElements as TransformedClosedElement[],
             smoothCorners,
             cornerRadius,
             angleThreshold
-          }).geometry
+          )
+          let region = createClosedContourGroupRegion(closedElements)
+          if (optimize) {
+            region = simplifyPlanarRegion(region, OPTIMIZATION_TOLERANCE)
+          }
+
+          if (source.role === 'support' || source.role === 'handle') {
+            slabs = [{ bottom: 0, top: roleDefinition.height, region }]
+            geometry = extrudePlanarRegion(region, { top: roleDefinition.height })
+          } else {
+            const sweep = sweepProfileOverPlanarRegion({
+              region,
+              profile: roleDefinition.profile,
+              join: smoothCorners && cornerRadius > EPSILON ? 'round' : 'miter',
+              miterLimit: 4,
+              maximumProfileError: 0.05,
+              simplificationTolerance: 0
+            })
+            geometry = sweep.geometry
+            slabs = sweep.slabs
+            profileBands = sweep.bands.length
+            maximumProfileError = sweep.maximumLateralError
+            minimumCrossSectionWidth = Math.min(...sweep.bands.flatMap(
+              (band) => band.intervals.map(
+                (interval) => interval.maximumOffset - interval.minimumOffset
+              )
+            ))
+          }
         } else {
           const globalWidthScale = Math.sqrt(Math.abs(fit.scaleX * fit.scaleY))
           const authoredWidth = source.width ?? roleDefinition.thickness
           thickness = Math.max(
             design.constraints.minimumWallThickness,
+            design.constraints.minimumFeatureSize,
             authoredWidth * transformedElement.localWidthScale * globalWidthScale
           )
-          geometry = createRibbonGeometry(
-            fittedPoints,
+          minimumCrossSectionWidth = thickness
+          let strokeRegion = strokePlanarPaths(
+            [transformedElement.points],
             thickness,
-            roleDefinition.height,
-            source.lineCap
+            {
+              join: source.lineJoin ?? 'miter',
+              endCap: source.lineCap ?? 'butt',
+              miterLimit: 4,
+              arcTolerance: 0.01
+            }
           )
-          if (source.lineJoin === 'round' || source.lineJoin === 'bevel') {
-            warnings.push(
-              `Open stroke "${source.id}" uses a bounded miter approximation for its ${source.lineJoin} joins.`
+          if (optimize) {
+            strokeRegion = simplifyPlanarRegion(
+              strokeRegion,
+              OPTIMIZATION_TOLERANCE
             )
           }
+          slabs = [{ bottom: 0, top: roleDefinition.height, region: strokeRegion }]
+          geometry = extrudePlanarRegion(strokeRegion, { top: roleDefinition.height })
         }
 
         validateGeneratedGeometry(geometry)
-        const vertexStart = vertices.length / 3
-        const triangleStart = faces.length / 3
         const bounds = geometryBounds(geometry)
-        mergeGeometry(vertices, faces, geometry)
-        roleCounts[source.role] += 1
-        elements.push({
-          id: source.id,
+        roleCounts[source.role] += groupedElements.length
+        generatedElements += groupedElements.length
+        const metadata: GeneratedElementMetadata = {
+          id: sourceIds.length === 1
+            ? source.id
+            : `${source.role}:${transformedElement.instanceId}`,
+          sourceIds,
+          assemblyId: transformedElement.assemblyId,
+          partId: transformedElement.partId,
           kind: source.kind,
           role: source.role,
-          vertexStart,
-          vertexCount: geometry.vertices.length / 3,
-          triangleStart,
-          triangleCount: geometry.faces.length / 3,
           height: bounds.maxY - bounds.minY,
           thickness,
+          minimumCrossSectionWidth,
+          profileBands,
+          maximumProfileError,
           bounds
+        }
+        elements.push(metadata)
+        contributions.push({
+          assemblyId: transformedElement.assemblyId,
+          partId: transformedElement.partId,
+          sourceIds,
+          slabs,
+          metadata
         })
       } catch (error) {
-        skippedElements += 1
+        skippedElements += groupedElements.length
         const message = error instanceof Error ? error.message : String(error)
-        warnings.push(`Skipped ${source.kind} "${source.id}": ${message}`)
+        warnings.push(`Skipped ${source.kind} group "${sourceIds.join(', ')}": ${message}`)
       }
+    }
+
+    if (generatedElements === 0 || contributions.length === 0) {
+      const summary = warnings.length > 0 ? ` ${warnings.join(' ')}` : ''
+      throw new Error(
+        `No printable geometry was produced (${skippedElements} of ${transformedElements.length} elements skipped).${summary}`
+      )
+    }
+
+    const vertices: number[] = []
+    const faces: number[] = []
+    const assemblies: GeneratedAssemblyMetadata[] = []
+    const assemblySlabs = new Map<string, PlanarRegionSlab[]>()
+    const readinessReasons: ProductionReadinessReason[] = []
+
+    if (skippedElements > 0) {
+      readinessReasons.push({
+        code: 'skipped-elements',
+        message: `${skippedElements} source element${skippedElements === 1 ? ' was' : 's were'} skipped during geometry generation.`
+      })
+    }
+
+    for (const assembly of design.assemblies) {
+      const assemblyContributions = contributions.filter(
+        (contribution) => contribution.assemblyId === assembly.id
+      )
+      if (assemblyContributions.length === 0) continue
+
+      const slabs = normalizePlanarRegionSlabs(
+        assemblyContributions.flatMap((contribution) => contribution.slabs)
+      )
+      const assemblyGeometry = extrudeStackedPlanarRegions(slabs)
+      validateGeneratedGeometry(assemblyGeometry)
+      const meshQuality = summarizeMeshQuality(assemblyGeometry)
+      const vertexStart = vertices.length / 3
+      const triangleStart = faces.length / 3
+      const bounds = geometryBounds(assemblyGeometry)
+      mergeGeometry(vertices, faces, assemblyGeometry)
+      assemblySlabs.set(assembly.id, slabs)
+      assemblies.push({
+        id: assembly.id,
+        partIds: assembly.partIds.filter((partId) => (
+          assemblyContributions.some((contribution) => contribution.partId === partId)
+        )),
+        sourceIds: [...new Set(assemblyContributions.flatMap(
+          (contribution) => contribution.sourceIds
+        ))],
+        vertexStart,
+        vertexCount: assemblyGeometry.vertices.length / 3,
+        triangleStart,
+        triangleCount: assemblyGeometry.faces.length / 3,
+        bounds,
+        meshQuality
+      })
+
+      if (!meshQuality.watertight) {
+        readinessReasons.push({
+          code: 'mesh-topology',
+          assemblyId: assembly.id,
+          message: `Assembly "${assembly.name}" failed its mesh audit: ${meshQuality.boundaryEdges} boundary edges, ${meshQuality.nonManifoldEdges} non-manifold edges, ${meshQuality.inconsistentWindingEdges} winding conflicts, ${meshQuality.degenerateTriangles} degenerate triangles, and ${meshQuality.duplicateTriangles} duplicate triangles.`
+        })
+      }
+      if (meshQuality.connectedComponents !== 1) {
+        readinessReasons.push({
+          code: 'disconnected-assembly',
+          assemblyId: assembly.id,
+          message: `Assembly "${assembly.name}" contains ${meshQuality.connectedComponents} disconnected material islands; add printable support geometry or separate them into assemblies.`
+        })
+      }
+
+      const attachmentGroups = countContributionAttachmentGroups(
+        assemblyContributions,
+        design.constraints.minimumFeatureSize
+      )
+      if (attachmentGroups > 1) {
+        readinessReasons.push({
+          code: 'weak-attachment',
+          assemblyId: assembly.id,
+          message: `Assembly "${assembly.name}" has ${attachmentGroups} contribution groups that are not joined across at least ${design.constraints.minimumFeatureSize} mm; widen their support overlap.`
+        })
+      }
+
+      const minimumWall = design.constraints.minimumWallThickness
+      const minimumFeature = design.constraints.minimumFeatureSize
+      const nozzleWidth = design.constraints.nozzleDiameter ?? minimumWall
+      const filledMinimumCrossSection = Math.max(minimumWall, minimumFeature)
+      const dimensionalViolations: string[] = []
+      const hasFilledContribution = assemblyContributions.some(
+        ({ metadata }) => metadata.role === 'support' || metadata.role === 'handle'
+      )
+      if (
+        hasFilledContribution
+        && lacksPrintableStructuralCore(
+          slabs,
+          filledMinimumCrossSection,
+          meshQuality.connectedComponents
+        )
+      ) {
+        dimensionalViolations.push(
+          `the assembly does not retain one printable structural core at ${filledMinimumCrossSection.toFixed(3)} mm required cross-section`
+        )
+      }
+      for (const contribution of assemblyContributions) {
+        const { metadata } = contribution
+        const requiredCrossSection = metadata.role === 'cut'
+          ? Math.min(minimumWall, nozzleWidth)
+          : Math.max(minimumWall, minimumFeature)
+        if (metadata.thickness + EPSILON < minimumWall) {
+          dimensionalViolations.push(
+            `${metadata.id} wall ${metadata.thickness.toFixed(3)} mm < ${minimumWall.toFixed(3)} mm`
+          )
+        }
+        if (
+          metadata.minimumCrossSectionWidth !== undefined
+          && metadata.minimumCrossSectionWidth + EPSILON < requiredCrossSection
+        ) {
+          dimensionalViolations.push(
+            `${metadata.id} cross-section ${metadata.minimumCrossSectionWidth.toFixed(3)} mm < ${requiredCrossSection.toFixed(3)} mm`
+          )
+        }
+        if (metadata.height + EPSILON < minimumFeature) {
+          dimensionalViolations.push(
+            `${metadata.id} height ${metadata.height.toFixed(3)} mm < ${minimumFeature.toFixed(3)} mm`
+          )
+        }
+      }
+      const buildVolume = design.constraints.buildVolume
+      if (buildVolume) {
+        const assemblyWidth = bounds.maxX - bounds.minX
+        const assemblyHeight = bounds.maxY - bounds.minY
+        const assemblyDepth = bounds.maxZ - bounds.minZ
+        if (
+          assemblyWidth > buildVolume.width + EPSILON
+          || assemblyDepth > buildVolume.depth + EPSILON
+          || assemblyHeight > buildVolume.height + EPSILON
+        ) {
+          dimensionalViolations.push(
+            `bounds ${assemblyWidth.toFixed(2)} × ${assemblyDepth.toFixed(2)} × ${assemblyHeight.toFixed(2)} mm exceed build volume ${buildVolume.width} × ${buildVolume.depth} × ${buildVolume.height} mm`
+          )
+        }
+      }
+      if (dimensionalViolations.length > 0) {
+        readinessReasons.push({
+          code: 'manufacturing-constraints',
+          assemblyId: assembly.id,
+          message: `Assembly "${assembly.name}" violates manufacturing constraints: ${dimensionalViolations.join('; ')}.`
+        })
+      }
+    }
+
+    for (let firstIndex = 0; firstIndex < assemblies.length; firstIndex += 1) {
+      const first = assemblies[firstIndex]
+      const firstSlabs = assemblySlabs.get(first.id) ?? []
+      for (let secondIndex = firstIndex + 1; secondIndex < assemblies.length; secondIndex += 1) {
+        const second = assemblies[secondIndex]
+        const secondSlabs = assemblySlabs.get(second.id) ?? []
+        if (!slabCollectionsCollide(firstSlabs, secondSlabs)) continue
+        readinessReasons.push({
+          code: 'cross-assembly-collision',
+          message: `Assemblies "${first.id}" and "${second.id}" occupy overlapping printable volume.`
+        })
+      }
+    }
+
+    if (assemblies.length > 1) {
+      readinessReasons.push({
+        code: 'multipart-export-unsupported',
+        message: `This design contains ${assemblies.length} printable assemblies; STL/OBJ export is blocked until multipart 3MF export is available.`
+      })
     }
 
     const geometry: Geometry = {
       vertices: new Float32Array(vertices),
       faces: new Uint32Array(faces)
     }
-    if (elements.length === 0 || geometry.faces.length === 0) {
-      const summary = warnings.length > 0 ? ` ${warnings.join(' ')}` : ''
-      throw new Error(
-        `No printable geometry was produced (${skippedElements} of ${transformedElements.length} elements skipped).${summary}`
-      )
+    if (geometry.faces.length === 0) {
+      throw new Error('No printable assembly geometry was produced')
     }
     const roleHeights = Object.fromEntries(
       DESIGN_ROLES.map((role) => [role, roleDefinitions[role].height])
     ) as Record<DesignRole, number>
+    const meshQuality = summarizeMeshQuality(geometry)
+    for (const reason of readinessReasons) warnings.push(reason.message)
 
     return {
       geometry,
@@ -729,12 +1452,18 @@ export class StructuredCookieCutterGenerator {
         faces: geometry.faces.length / 3,
         scale,
         optimized: optimize,
-        generatedElements: elements.length,
+        generatedElements,
         skippedElements,
         roleCounts,
         roleHeights,
         sourceBounds,
         elements,
+        assemblies,
+        meshQuality,
+        productionReadiness: {
+          ready: readinessReasons.length === 0,
+          reasons: readinessReasons
+        },
         warnings
       }
     }

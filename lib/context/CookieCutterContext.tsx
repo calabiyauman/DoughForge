@@ -271,6 +271,13 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
       setStatus('Cannot export an incomplete mesh; fix the skipped design elements first')
       return
     }
+    if (!state.cookieCutter.metadata.productionReadiness.ready) {
+      setStatus(
+        state.cookieCutter.metadata.productionReadiness.reasons[0]?.message
+          ?? 'Cannot export a design that failed production-readiness checks'
+      )
+      return
+    }
     try {
       const data = serializeAsciiSTL(state.cookieCutter.geometry, {
         solidName: safeFilename(state.design.name)
@@ -292,6 +299,13 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
     }
     if (state.cookieCutter.metadata.skippedElements > 0) {
       setStatus('Cannot export an incomplete mesh; fix the skipped design elements first')
+      return
+    }
+    if (!state.cookieCutter.metadata.productionReadiness.ready) {
+      setStatus(
+        state.cookieCutter.metadata.productionReadiness.reasons[0]?.message
+          ?? 'Cannot export a design that failed production-readiness checks'
+      )
       return
     }
     try {

@@ -15,6 +15,21 @@ $env:DOUGHFORGE_REFERENCE_ROOT = 'D:\private\cookiecutters'
 npm run validate:references
 ```
 
+Run the SVG import → structured generation → mesh-audit replay and compare it
+with the frozen baseline:
+
+```powershell
+$env:DOUGHFORGE_REFERENCE_ROOT = 'D:\private\cookiecutters'
+npm run replay:references
+```
+
+The replay fails on skipped source elements, physical profile drift, boundary or
+non-manifold edges, winding conflicts, degenerate or duplicate faces, and any
+unexpected change to the frozen import/mesh metrics in `replay-baseline.json`.
+The baseline also records production-readiness and reason codes. A disconnected
+source such as the current Buddy SVG remains a valid diagnostic case, but export
+stays blocked until authored support geometry joins its material islands.
+
 Keep the assets external and private unless their rights explicitly permit redistribution. Do not add large model files to this repository.
 
 ## Held-out selection

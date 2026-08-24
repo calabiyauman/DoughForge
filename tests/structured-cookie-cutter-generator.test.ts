@@ -113,6 +113,31 @@ const profile = ProfileGenerator.classic({
   cutterThickness: 0.8
 })
 
+function meshVolume(
+  vertices: Float32Array,
+  faces: Uint32Array
+): number {
+  let signedVolume = 0
+  for (let index = 0; index < faces.length; index += 3) {
+    const first = faces[index] * 3
+    const second = faces[index + 1] * 3
+    const third = faces[index + 2] * 3
+    const ax = vertices[first]
+    const ay = vertices[first + 1]
+    const az = vertices[first + 2]
+    const bx = vertices[second]
+    const by = vertices[second + 1]
+    const bz = vertices[second + 2]
+    const cx = vertices[third]
+    const cy = vertices[third + 1]
+    const cz = vertices[third + 2]
+    signedVolume += ax * (by * cz - bz * cy)
+      + ay * (bz * cx - bx * cz)
+      + az * (bx * cy - by * cx)
+  }
+  return Math.abs(signedVolume / 6)
+}
+
 test('generates every outer, hole, and role-separated closed contour', () => {
   const design = designWithGeometry([
     square('outer', 'cut', 0, 0, 30),
@@ -128,8 +153,14 @@ test('generates every outer, hole, and role-separated closed contour', () => {
   assert.equal(result.metadata.skippedElements, 0)
   assert.equal(result.metadata.roleCounts.cut, 2)
   assert.equal(result.metadata.roleCounts.stamp, 1)
+  assert.equal(result.metadata.meshQuality.watertight, true)
+  assert.ok(result.metadata.meshQuality.connectedComponents >= 3)
+  assert.equal(result.metadata.productionReadiness.ready, false)
+  assert.ok(result.metadata.productionReadiness.reasons.some(
+    (reason) => reason.code === 'disconnected-assembly'
+  ))
   assert.deepEqual(
-    result.metadata.elements.map((element) => element.id),
+    result.metadata.elements.flatMap((element) => element.sourceIds),
     ['outer', 'hole', 'stamp-detail']
   )
 })
@@ -149,6 +180,192 @@ test('uses lower role-specific heights for emboss details than the cutting wall'
   assert.ok(cut.height > emboss.height)
   assert.ok(Math.abs(cut.height - result.metadata.roleHeights.cut) < 1e-5)
   assert.ok(Math.abs(emboss.height - result.metadata.roleHeights.emboss) < 1e-5)
+})
+
+test('turns compound support contours into a filled plate with preserved holes', () => {
+  const design = designWithGeometry([
+    square('support-outer', 'support', 0, 0, 20),
+    square(
+      'support-hole',
+      'support',
+      6,
+      6,
+      8,
+      { kind: 'hole', outerContourId: 'support-outer' }
+    )
+  ], {
+    canvasWidth: 20,
+    canvasHeight: 20,
+    targetWidth: 40,
+    targetHeight: 40
+  })
+
+  const result = StructuredCookieCutterGenerator.generate({ design, profile })
+
+  assert.equal(result.metadata.generatedElements, 2)
+  assert.equal(result.metadata.elements.length, 1)
+  assert.deepEqual(result.metadata.elements[0].sourceIds, [
+    'support-outer',
+    'support-hole'
+  ])
+  assert.equal(result.metadata.roleCounts.support, 2)
+  assert.equal(result.metadata.meshQuality.watertight, true)
+  assert.equal(result.metadata.meshQuality.connectedComponents, 1)
+  assert.equal(
+    result.metadata.productionReadiness.ready,
+    true,
+    JSON.stringify(result.metadata.productionReadiness.reasons)
+  )
+})
+
+test('unions cut, stamp, and support contributions into one assembly boundary', () => {
+  const design = designWithGeometry([
+    square('cut-wall', 'cut', 1, 1, 28),
+    square('stamp-detail', 'stamp', 10, 10, 4),
+    square('support-plate', 'support', 0, 0, 30)
+  ], {
+    canvasWidth: 30,
+    canvasHeight: 30,
+    targetWidth: 60,
+    targetHeight: 60
+  })
+
+  const result = StructuredCookieCutterGenerator.generate({ design, profile })
+
+  assert.equal(
+    result.metadata.productionReadiness.ready,
+    true,
+    JSON.stringify(result.metadata.productionReadiness.reasons)
+  )
+  assert.equal(result.metadata.assemblies.length, 1)
+  assert.equal(result.metadata.assemblies[0].meshQuality.watertight, true)
+  assert.equal(result.metadata.assemblies[0].meshQuality.connectedComponents, 1)
+  assert.equal(result.metadata.meshQuality.connectedComponents, 1)
+  assert.equal(result.metadata.meshQuality.duplicateTriangles, 0)
+})
+
+test('unions outer-owned compounds without letting one hole cut another outer', () => {
+  const design = designWithGeometry([
+    square('outer-a', 'support', 0, 0, 20),
+    square('outer-b', 'support', 15, 0, 20),
+    square(
+      'hole-a',
+      'support',
+      14,
+      5,
+      5,
+      { kind: 'hole', outerContourId: 'outer-a' }
+    )
+  ], {
+    canvasWidth: 35,
+    canvasHeight: 20,
+    targetWidth: 35,
+    targetHeight: 20
+  })
+
+  const result = StructuredCookieCutterGenerator.generate({ design, profile })
+  const planarArea = meshVolume(
+    result.geometry.vertices,
+    result.geometry.faces
+  ) / result.metadata.roleHeights.support
+
+  // The two outers union to 700 mm². Only the 5 mm² portion of hole-a
+  // not covered by outer-b remains absent after the compounds are unioned.
+  assert.ok(Math.abs(planarArea - 695) < 1e-3)
+  assert.equal(result.metadata.meshQuality.watertight, true)
+  assert.equal(result.metadata.meshQuality.connectedComponents, 1)
+})
+
+test('rejects a hole assigned to the wrong same-role outer', () => {
+  const design = designWithGeometry([
+    square('outer-a', 'support', 0, 0, 10),
+    square('outer-b', 'support', 20, 0, 10),
+    square(
+      'wrong-hole',
+      'support',
+      22,
+      2,
+      4,
+      { kind: 'hole', outerContourId: 'outer-a' }
+    )
+  ], {
+    canvasWidth: 30,
+    canvasHeight: 10,
+    targetWidth: 30,
+    targetHeight: 10
+  })
+
+  assert.throws(
+    () => StructuredCookieCutterGenerator.generate({ design, profile }),
+    /Hole "wrong-hole" lies outside or touches referenced outer contour "outer-a"/
+  )
+})
+
+test('rejects a hole that touches its referenced outer boundary', () => {
+  const design = designWithGeometry([
+    square('outer', 'support', 0, 0, 20),
+    square(
+      'touching-hole',
+      'support',
+      0,
+      6,
+      5,
+      { kind: 'hole', outerContourId: 'outer' }
+    )
+  ], {
+    canvasWidth: 20,
+    canvasHeight: 20,
+    targetWidth: 20,
+    targetHeight: 20
+  })
+
+  assert.throws(
+    () => StructuredCookieCutterGenerator.generate({ design, profile }),
+    /Hole "touching-hole" lies outside or touches referenced outer contour "outer"/
+  )
+})
+
+test('preserves an explicit fill rule when building each contour', () => {
+  const twiceWoundPoints = [
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+    { x: 10, y: 10 },
+    { x: 0, y: 10 },
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+    { x: 10, y: 10 },
+    { x: 0, y: 10 }
+  ]
+  const evenodd = square('evenodd', 'support', 0, 0, 10)
+  evenodd.points = twiceWoundPoints
+  evenodd.fillRule = 'evenodd'
+
+  assert.throws(
+    () => StructuredCookieCutterGenerator.generate({
+      design: designWithGeometry([evenodd], {
+        canvasWidth: 10,
+        canvasHeight: 10,
+        targetWidth: 10,
+        targetHeight: 10
+      }),
+      profile
+    }),
+    /Contour "evenodd" produced no planar area/
+  )
+
+  const nonzero = { ...evenodd, id: 'nonzero', fillRule: 'nonzero' as const }
+  const result = StructuredCookieCutterGenerator.generate({
+    design: designWithGeometry([nonzero], {
+      canvasWidth: 10,
+      canvasHeight: 10,
+      targetWidth: 10,
+      targetHeight: 10
+    }),
+    profile
+  })
+  assert.equal(result.metadata.generatedElements, 1)
+  assert.equal(result.metadata.meshQuality.watertight, true)
+  assert.equal(result.metadata.productionReadiness.ready, true)
 })
 
 test('composes part and assembly transforms without mutating authored points', () => {
@@ -193,6 +410,10 @@ test('composes part and assembly transforms without mutating authored points', (
   const secondCenterX = (secondMetadata.bounds.minX + secondMetadata.bounds.maxX) / 2
   assert.ok(Math.abs(firstCenterX + 25) < 1e-5)
   assert.ok(Math.abs(secondCenterX - 25) < 1e-5)
+  assert.equal(result.metadata.productionReadiness.ready, false)
+  assert.ok(result.metadata.productionReadiness.reasons.some(
+    (reason) => reason.code === 'multipart-export-unsupported'
+  ))
   assert.equal(JSON.stringify(design), authoredSnapshot)
 })
 
@@ -203,7 +424,7 @@ test('caps an open round-ended stroke as a watertight indexed ribbon prism', () 
     role: 'stamp',
     width: 1.2,
     lineCap: 'round',
-    lineJoin: 'miter',
+    lineJoin: 'round',
     points: [
       { x: 0, y: 0 },
       { x: 12, y: 0 },
@@ -224,6 +445,13 @@ test('caps an open round-ended stroke as a watertight indexed ribbon prism', () 
   assert.equal(result.metadata.generatedElements, 1)
   assert.equal(result.metadata.skippedElements, 0)
   assert.equal(result.metadata.roleCounts.stamp, 1)
+  assert.equal(result.metadata.meshQuality.watertight, true)
+  assert.equal(result.metadata.meshQuality.connectedComponents, 1)
+  assert.equal(result.metadata.productionReadiness.ready, true)
+  assert.equal(
+    result.metadata.warnings.some((warning) => /bounded miter approximation/.test(warning)),
+    false
+  )
   assert.ok(Array.from(vertices).every(Number.isFinite))
 
   const edgeUse = new Map<string, number>()
@@ -255,7 +483,245 @@ test('caps an open round-ended stroke as a watertight indexed ribbon prism', () 
   for (const count of edgeUse.values()) assert.equal(count, 2)
 })
 
-test('merges a dense contour without spreading its typed vertex buffer', () => {
+test('blocks colliding physical assemblies instead of flattening their intent', () => {
+  const first = square('first-object', 'support', 0, 0, 10)
+  const second = square('second-object', 'support', 0, 0, 10)
+  const parts: DesignPart[] = [
+    { id: 'first-part', name: 'First part', geometryIds: [first.id] },
+    { id: 'second-part', name: 'Second part', geometryIds: [second.id] }
+  ]
+  const design = designWithGeometry([first, second], {
+    parts,
+    assemblies: [
+      { id: 'first-assembly', name: 'First assembly', partIds: ['first-part'] },
+      { id: 'second-assembly', name: 'Second assembly', partIds: ['second-part'] }
+    ],
+    canvasWidth: 10,
+    canvasHeight: 10,
+    targetWidth: 20,
+    targetHeight: 20
+  })
+
+  const result = StructuredCookieCutterGenerator.generate({ design, profile })
+
+  assert.equal(result.metadata.productionReadiness.ready, false)
+  assert.ok(result.metadata.productionReadiness.reasons.some(
+    (reason) => reason.code === 'cross-assembly-collision'
+  ))
+})
+
+test('requires contribution overlaps to meet the minimum printable feature width', () => {
+  const generateWithOverlap = (overlap: number) => {
+    const first = square('first-support', 'support', 0, 0, 10)
+    const second = square('second-support', 'support', 10 - overlap, 0, 10)
+    const width = 20 - overlap
+    return StructuredCookieCutterGenerator.generate({
+      design: designWithGeometry([first, second], {
+        parts: [
+          { id: 'first-part', name: 'First part', geometryIds: [first.id] },
+          { id: 'second-part', name: 'Second part', geometryIds: [second.id] }
+        ],
+        assemblies: [{
+          id: 'joined-assembly',
+          name: 'Joined assembly',
+          partIds: ['first-part', 'second-part']
+        }],
+        canvasWidth: width,
+        canvasHeight: 10,
+        targetWidth: width,
+        targetHeight: 10
+      }),
+      profile
+    })
+  }
+
+  const weak = generateWithOverlap(0.001)
+  assert.equal(weak.metadata.meshQuality.connectedComponents, 1)
+  assert.equal(weak.metadata.productionReadiness.ready, false)
+  assert.ok(weak.metadata.productionReadiness.reasons.some(
+    (reason) => reason.code === 'weak-attachment'
+  ))
+
+  const printable = generateWithOverlap(1)
+  assert.equal(
+    printable.metadata.productionReadiness.ready,
+    true,
+    JSON.stringify(printable.metadata.productionReadiness.reasons)
+  )
+})
+
+test('blocks geometry that exceeds the authored printer build volume', () => {
+  const design = designWithGeometry([square('large-support', 'support', 0, 0, 10)], {
+    canvasWidth: 10,
+    canvasHeight: 10,
+    targetWidth: 20,
+    targetHeight: 20
+  })
+  design.constraints.buildVolume = { width: 5, depth: 5, height: 5 }
+
+  const result = StructuredCookieCutterGenerator.generate({ design, profile })
+
+  assert.equal(result.metadata.productionReadiness.ready, false)
+  assert.ok(result.metadata.productionReadiness.reasons.some(
+    (reason) => reason.code === 'manufacturing-constraints'
+  ))
+})
+
+test('blocks a cutter profile thinner than the authored nozzle and wall limits', () => {
+  const thinProfile = ProfileGenerator.classic({
+    wallThickness: 0.2,
+    cutterThickness: 0.1,
+    height: 12
+  })
+  const design = designWithGeometry([square('thin-cut', 'cut', 0, 0, 20)], {
+    canvasWidth: 20,
+    canvasHeight: 20,
+    targetWidth: 40,
+    targetHeight: 40
+  })
+
+  const result = StructuredCookieCutterGenerator.generate({
+    design,
+    profile: thinProfile
+  })
+
+  assert.equal(result.metadata.productionReadiness.ready, false)
+  assert.ok(result.metadata.productionReadiness.reasons.some(
+    (reason) => reason.code === 'manufacturing-constraints'
+  ))
+})
+
+test('blocks a filled support with a sub-minimum internal neck', () => {
+  const supportWithNeck = (id: string, neckWidth: number): ClosedContour => ({
+    id,
+    kind: 'closed-contour',
+    role: 'support',
+    relationship: { kind: 'outer' },
+    points: [
+      { x: 0, y: 0 },
+      { x: 8, y: 0 },
+      { x: 8, y: 4 - neckWidth / 2 },
+      { x: 12, y: 4 - neckWidth / 2 },
+      { x: 12, y: 0 },
+      { x: 20, y: 0 },
+      { x: 20, y: 8 },
+      { x: 12, y: 8 },
+      { x: 12, y: 4 + neckWidth / 2 },
+      { x: 8, y: 4 + neckWidth / 2 },
+      { x: 8, y: 8 },
+      { x: 0, y: 8 }
+    ]
+  })
+  const narrowSupport = supportWithNeck('narrow-support', 0.1)
+  const design = designWithGeometry([narrowSupport], {
+    canvasWidth: 20,
+    canvasHeight: 8,
+    targetWidth: 20,
+    targetHeight: 8
+  })
+
+  const result = StructuredCookieCutterGenerator.generate({ design, profile })
+
+  assert.equal(result.metadata.meshQuality.watertight, true)
+  assert.equal(result.metadata.meshQuality.connectedComponents, 1)
+  assert.equal(result.metadata.elements[0].minimumCrossSectionWidth, undefined)
+  assert.equal(result.metadata.productionReadiness.ready, false)
+  assert.ok(result.metadata.productionReadiness.reasons.some(
+    (reason) => reason.code === 'manufacturing-constraints'
+      && /printable structural core/.test(reason.message)
+  ))
+
+  const wallLimitedDesign = designWithGeometry([
+    supportWithNeck('wall-limited-support', 1)
+  ], {
+    canvasWidth: 20,
+    canvasHeight: 8,
+    targetWidth: 20,
+    targetHeight: 8
+  })
+  wallLimitedDesign.constraints.minimumWallThickness = 2
+  const wallLimited = StructuredCookieCutterGenerator.generate({
+    design: wallLimitedDesign,
+    profile
+  })
+  assert.equal(wallLimited.metadata.productionReadiness.ready, false)
+  assert.ok(wallLimited.metadata.productionReadiness.reasons.some(
+    (reason) => reason.code === 'manufacturing-constraints'
+      && /2\.000 mm required cross-section/.test(reason.message)
+  ))
+})
+
+test('reports optimization only when planar simplification is applied', () => {
+  const pointCount = 256
+  const curvedSupport: ClosedContour = {
+    id: 'curved-support',
+    kind: 'closed-contour',
+    role: 'support',
+    relationship: { kind: 'outer' },
+    points: Array.from({ length: pointCount }, (_, index) => {
+      const angle = index / pointCount * Math.PI * 2
+      return {
+        x: 10 + Math.cos(angle) * 9,
+        y: 10 + Math.sin(angle) * 9
+      }
+    })
+  }
+  const design = designWithGeometry([curvedSupport], {
+    canvasWidth: 20,
+    canvasHeight: 20,
+    targetWidth: 20,
+    targetHeight: 20
+  })
+
+  const unoptimized = StructuredCookieCutterGenerator.generate({
+    design,
+    profile,
+    optimize: false
+  })
+  const optimized = StructuredCookieCutterGenerator.generate({
+    design,
+    profile,
+    optimize: true
+  })
+
+  assert.equal(unoptimized.metadata.optimized, false)
+  assert.equal(optimized.metadata.optimized, true)
+  assert.ok(optimized.metadata.vertices < unoptimized.metadata.vertices)
+  assert.ok(optimized.metadata.faces < unoptimized.metadata.faces)
+  assert.equal(optimized.metadata.productionReadiness.ready, true)
+})
+
+test('applies the authored corner radius before robust profile offsets', () => {
+  const design = designWithGeometry([square('rounded-cut', 'cut', 0, 0, 20)], {
+    canvasWidth: 20,
+    canvasHeight: 20,
+    targetWidth: 40,
+    targetHeight: 40
+  })
+  const smallRadius = StructuredCookieCutterGenerator.generate({
+    design,
+    profile,
+    smoothCorners: true,
+    cornerRadius: 0.2,
+    angleThreshold: 45
+  })
+  const largeRadius = StructuredCookieCutterGenerator.generate({
+    design,
+    profile,
+    smoothCorners: true,
+    cornerRadius: 2,
+    angleThreshold: 45
+  })
+
+  assert.equal(smallRadius.metadata.productionReadiness.ready, true)
+  assert.equal(largeRadius.metadata.productionReadiness.ready, true)
+  assert.notDeepEqual(
+    Array.from(smallRadius.geometry.vertices),
+    Array.from(largeRadius.geometry.vertices)
+  )
+})
+
+test('simplifies and generates a dense contour without overflowing typed buffers', () => {
   const segmentCount = 12_000
   const points = Array.from({ length: segmentCount }, (_, index) => {
     const angle = index / segmentCount * Math.PI * 2
@@ -282,7 +748,8 @@ test('merges a dense contour without spreading its typed vertex buffer', () => {
 
   assert.equal(result.metadata.generatedElements, 1)
   assert.equal(result.metadata.skippedElements, 0)
-  assert.ok(result.geometry.vertices.length > 125_000)
+  assert.ok(result.geometry.vertices.length > 0)
+  assert.ok(result.geometry.vertices.length < 125_000)
   assert.ok(result.geometry.faces.length > 0)
 })
 
@@ -310,7 +777,7 @@ test('rejects a valid design when every transformed element collapses', () => {
     (error: unknown) => {
       assert.ok(error instanceof Error)
       assert.match(error.message, /No printable geometry was produced \(1 of 1 elements skipped\)/)
-      assert.match(error.message, /Skipped closed-contour "collapsed-outline"/)
+      assert.match(error.message, /Skipped closed-contour group "collapsed-outline"/)
       return true
     }
   )
