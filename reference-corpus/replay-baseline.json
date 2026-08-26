@@ -1,0 +1,61 @@
+{
+  "schema": "doughforge.reference-replay-baseline",
+  "version": 1,
+  "units": "mm",
+  "items": {
+    "barbie-svg": {
+      "contours": 24,
+      "holes": 11,
+      "strokes": 0,
+      "sourcePoints": 924,
+      "parserWarnings": 0,
+      "meshVertices": 1756,
+      "meshFaces": 3512,
+      "meshComponents": 1,
+      "generationWarnings": 0,
+      "productionReady": true,
+      "readinessReasonCodes": []
+    },
+    "singlet-svg": {
+      "contours": 1,
+      "holes": 0,
+      "strokes": 0,
+      "sourcePoints": 215,
+      "parserWarnings": 0,
+      "meshVertices": 656,
+      "meshFaces": 1312,
+      "meshComponents": 1,
+      "generationWarnings": 0,
+      "productionReady": true,
+      "readinessReasonCodes": []
+    },
+    "high-top-svg": {
+      "contours": 1,
+      "holes": 0,
+      "strokes": 0,
+      "sourcePoints": 138,
+      "parserWarnings": 0,
+      "meshVertices": 428,
+      "meshFaces": 856,
+      "meshComponents": 1,
+      "generationWarnings": 0,
+      "productionReady": true,
+      "readinessReasonCodes": []
+    },
+    "buddy-svg": {
+      "contours": 45,
+      "holes": 22,
+      "strokes": 0,
+      "sourcePoints": 1095,
+      "parserWarnings": 0,
+      "meshVertices": 4026,
+      "meshFaces": 8036,
+      "meshComponents": 6,
+      "generationWarnings": 1,
+      "productionReady": false,
+      "readinessReasonCodes": [
+        "disconnected-assembly"
+      ]
+    }
+  }
+}
