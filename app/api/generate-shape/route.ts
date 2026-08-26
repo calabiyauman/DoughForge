@@ -8,9 +8,10 @@ import {
   normalizeOutline,
   signedArea
 } from '@/lib/geometry/outline'
+import { tracePngSilhouette } from '@/lib/geometry/pngSilhouette'
 
 export const runtime = 'nodejs'
-export const maxDuration = 30
+export const maxDuration = 120
 
 const categories = [
   'animal',
@@ -116,7 +117,7 @@ function validateShape(value: unknown): ShapeResponse {
   }
 
   const candidate = value as Partial<ShapeResponse>
-  if (!Array.isArray(candidate.points) || candidate.points.length < 3 || candidate.points.length > 50) {
+  if (!Array.isArray(candidate.points) || candidate.points.length < 3 || candidate.points.length > 400) {
     throw new Error('Model returned an invalid point array')
   }
 
@@ -208,11 +209,62 @@ export async function POST(request: Request) {
   }
 
   const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini'
+  const imageModel = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2'
   const subjectHint = getSubjectHint(description)
 
   try {
     const openai = new OpenAI({ apiKey })
     let lastError: unknown
+
+    try {
+      const result = await openai.images.generate({
+        model: imageModel,
+        quality: 'low',
+        size: '1024x1024',
+        prompt: [
+          `Create a manufacturing-ready cookie-cutter silhouette of: ${description}.`,
+          'One solid, completely filled black shape centered on a pure white background.',
+          'Show the subject from its most recognizable angle and exaggerate its iconic exterior features.',
+          'Use one connected exterior silhouette only: no holes, internal lines, shading, texture, border, lettering, floor, or shadow.',
+          'Keep limbs, stems, antennae, and other narrow connections thick and keep inward notches broad and shallow.',
+          'Leave generous white margin on every side. Crisp flat vector-icon edges.'
+        ].join(' ')
+      })
+      const encodedImage = result.data?.[0]?.b64_json
+      if (!encodedImage) throw new Error('OpenAI returned no silhouette image')
+
+      const imageBuffer = Buffer.from(encodedImage, 'base64')
+      let shape: ShapeResponse | undefined
+      let traceError: unknown
+      for (const closingRadius of [0, 4, 8, 12, 18, 24, 30]) {
+        try {
+          // Keep traced coordinates inside the structured-vector validator's
+          // input range; validateShape performs the single final 75 mm scale.
+          const tracedPoints = tracePngSilhouette(imageBuffer, 55, closingRadius)
+          shape = validateShape({
+            points: tracedPoints,
+            reasoning: 'Generated as a high-resolution silhouette, then traced and print-validated.',
+            category: 'abstract'
+          })
+          console.info('Image silhouette accepted', {
+            model: imageModel,
+            closingRadius,
+            pointCount: shape.points.length
+          })
+          break
+        } catch (error) {
+          traceError = error
+        }
+      }
+      if (!shape) throw traceError ?? new Error('Generated silhouette could not be made printable')
+      return Response.json(
+        { ...shape, model: imageModel, generator: 'image-trace' },
+        { headers: { 'Cache-Control': 'no-store' } }
+      )
+    } catch (error) {
+      lastError = error
+      console.warn('Image silhouette generation was rejected; trying vector fallback', error)
+    }
 
     for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt += 1) {
       try {
