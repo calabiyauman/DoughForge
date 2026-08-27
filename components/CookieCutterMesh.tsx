@@ -3,6 +3,7 @@
 import { useEffect, useRef, useMemo } from 'react'
 import { Mesh } from 'three'
 import * as THREE from 'three'
+import { createPreviewBufferGeometry } from '@/lib/geometry/previewGeometry'
 
 interface CookieCutterMeshProps {
   geometry: {
@@ -16,27 +17,10 @@ export default function CookieCutterMesh({ geometry, wireframe = false }: Cookie
   const meshRef = useRef<Mesh>(null!)
 
   // Create Three.js geometry from data
-  const threeGeometry = useMemo(() => {
-    const geo = new THREE.BufferGeometry()
-    
-    // Set vertices
-    geo.setAttribute('position', new THREE.BufferAttribute(geometry.vertices, 3))
-    
-    // Set faces (indices)
-    geo.setIndex(new THREE.BufferAttribute(geometry.faces, 1))
-    
-    // Compute normals for proper lighting
-    geo.computeVertexNormals()
-    geo.computeBoundingBox()
-    geo.computeBoundingSphere()
-
-    if (geo.boundingBox) {
-      const center = geo.boundingBox.getCenter(new THREE.Vector3())
-      geo.translate(-center.x, -center.y, -center.z)
-    }
-
-    return geo
-  }, [geometry])
+  const threeGeometry = useMemo(
+    () => createPreviewBufferGeometry(geometry),
+    [geometry]
+  )
 
   useEffect(() => () => threeGeometry.dispose(), [threeGeometry])
 
