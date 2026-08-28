@@ -141,13 +141,18 @@ export default function ThreeViewer() {
         }}
         className="bg-gradient-to-b from-gray-50 to-gray-100"
       >
-        {/* Enhanced Lighting for Natural Shadows */}
-        <ambientLight intensity={0.4} color="#ffffff" />
+        {/* Soft studio fill keeps both the inner and outer walls readable. */}
+        <ambientLight intensity={0.2} color="#ffffff" />
+        <hemisphereLight
+          color="#ffffff"
+          groundColor="#cbd5e1"
+          intensity={0.55}
+        />
         
         {/* Main key light with stable shadows */}
         <directionalLight
           position={[30, 40, 30]}
-          intensity={1.0}
+          intensity={0.95}
           castShadow
           shadow-mapSize-width={2048}
           shadow-mapSize-height={2048}
@@ -164,14 +169,14 @@ export default function ThreeViewer() {
         {/* Fill light to soften shadows */}
         <directionalLight 
           position={[-20, 30, -20]} 
-          intensity={0.4} 
+          intensity={0.3}
           color="#f0f8ff"
         />
         
         {/* Rim light for better definition */}
         <directionalLight 
           position={[0, 20, -40]} 
-          intensity={0.3} 
+          intensity={0.2}
           color="#fff8f0"
         />
 

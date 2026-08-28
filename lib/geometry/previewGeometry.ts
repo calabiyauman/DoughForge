@@ -1,5 +1,8 @@
 import * as THREE from 'three'
+import { toCreasedAngleWeightedNormals } from './previewNormals'
 import { calculatePreviewPlacement } from './previewPlacement'
+
+export const PREVIEW_CREASE_ANGLE = THREE.MathUtils.degToRad(45)
 
 export interface PreviewGeometrySource {
   vertices: Float32Array
@@ -10,16 +13,25 @@ export interface PreviewGeometrySource {
 export function createPreviewBufferGeometry(
   source: PreviewGeometrySource
 ): THREE.BufferGeometry {
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute(
+  const indexedGeometry = new THREE.BufferGeometry()
+  indexedGeometry.setAttribute(
     'position',
     new THREE.BufferAttribute(source.vertices.slice(), 3)
   )
-  geometry.setIndex(new THREE.BufferAttribute(source.faces.slice(), 1))
-  geometry.computeVertexNormals()
+  indexedGeometry.setIndex(new THREE.BufferAttribute(source.faces.slice(), 1))
 
   const placement = calculatePreviewPlacement(source.vertices)
-  geometry.translate(...placement.translation)
+  indexedGeometry.translate(...placement.translation)
+
+  // Generated meshes intentionally share vertices between caps, walls, and
+  // profile transitions. A global smooth-normal pass blends those surfaces
+  // together and exposes the cap triangulation as dark wedges. Crease-aware
+  // normals keep genuine profile edges crisp while still smoothing curves.
+  const geometry = toCreasedAngleWeightedNormals(
+    indexedGeometry,
+    PREVIEW_CREASE_ANGLE
+  )
+  indexedGeometry.dispose()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return geometry

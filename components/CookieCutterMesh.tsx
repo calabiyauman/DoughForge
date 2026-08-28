@@ -35,13 +35,13 @@ export default function CookieCutterMesh({ geometry, wireframe = false }: Cookie
     }
 
     return new THREE.MeshStandardMaterial({
-      color: 0xf0f0f0,
-      roughness: 0.3,
-      metalness: 0.1,
+      color: 0xe5e7eb,
+      roughness: 0.58,
+      metalness: 0,
       transparent: false,
       opacity: 1,
       side: THREE.DoubleSide,
-      envMapIntensity: 0.5,
+      dithering: true,
     })
   }, [wireframe])
 
