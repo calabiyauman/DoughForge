@@ -1,17 +1,32 @@
 'use client'
 
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useMemo, type MutableRefObject } from 'react'
 import { Canvas, extend, useThree } from '@react-three/fiber'
 import { useCookieCutter } from '@/lib/context/CookieCutterContext'
 import CookieCutterMesh from './CookieCutterMesh'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { calculatePreviewPlacement } from '@/lib/geometry/previewPlacement'
 
 // Extend Three.js objects for JSX usage
 extend({ GridHelper: THREE.GridHelper })
 
+const DEFAULT_CAMERA_TARGET: [number, number, number] = [0, 0, 0]
+
+declare global {
+  interface Window {
+    resetThreeView?: () => void
+  }
+}
+
 // Custom OrbitControls component to avoid Drei dependencies
-function SimpleOrbitControls({ controlsRef }: { controlsRef: any }) {
+function SimpleOrbitControls({
+  controlsRef,
+  target
+}: {
+  controlsRef: MutableRefObject<OrbitControls | null>
+  target: readonly [number, number, number]
+}) {
   const { camera, gl } = useThree()
   
   useEffect(() => {
@@ -27,79 +42,83 @@ function SimpleOrbitControls({ controlsRef }: { controlsRef: any }) {
     controls.maxDistance = 200
     
     controlsRef.current = controls
-    
+    let animationFrame = 0
     const animate = () => {
       controls.update()
-      requestAnimationFrame(animate)
+      animationFrame = requestAnimationFrame(animate)
     }
     animate()
     
     return () => {
+      cancelAnimationFrame(animationFrame)
       controls.dispose()
+      if (controlsRef.current === controls) controlsRef.current = null
     }
   }, [camera, gl, controlsRef])
+
+  useEffect(() => {
+    const controls = controlsRef.current
+    if (!controls) return
+    controls.target.set(...target)
+    controls.update()
+    controls.saveState()
+  }, [controlsRef, target])
   
   return null
 }
 
 function CameraFitter({
-  vertices,
+  placement,
   controlsRef
 }: {
-  vertices: Float32Array
-  controlsRef: { current: any }
+  placement: ReturnType<typeof calculatePreviewPlacement>
+  controlsRef: MutableRefObject<OrbitControls | null>
 }) {
   const { camera, size } = useThree()
 
   useEffect(() => {
-    if (!(camera instanceof THREE.PerspectiveCamera) || vertices.length < 3) return
+    if (!(camera instanceof THREE.PerspectiveCamera)) return
 
-    const bounds = new THREE.Box3()
-    const point = new THREE.Vector3()
-    for (let index = 0; index < vertices.length; index += 3) {
-      bounds.expandByPoint(point.set(
-        vertices[index],
-        vertices[index + 1],
-        vertices[index + 2]
-      ))
-    }
-
-    const dimensions = bounds.getSize(new THREE.Vector3())
-    const largestDimension = Math.max(dimensions.x, dimensions.y, dimensions.z)
+    const largestDimension = Math.max(...placement.dimensions)
     const verticalFov = THREE.MathUtils.degToRad(camera.fov)
     const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * (size.width / size.height))
     const limitingFov = Math.min(verticalFov, horizontalFov)
     const distance = Math.max(30, (largestDimension / 2) / Math.tan(limitingFov / 2) * 1.65)
     const direction = new THREE.Vector3(1, 1, 1).normalize()
+    const target = new THREE.Vector3(...placement.target)
 
-    camera.position.copy(direction.multiplyScalar(distance))
+    camera.position.copy(direction.multiplyScalar(distance).add(target))
     camera.near = Math.max(0.1, distance / 100)
     camera.far = distance * 10
-    camera.lookAt(0, 0, 0)
+    camera.lookAt(target)
     camera.updateProjectionMatrix()
 
     if (controlsRef.current) {
-      controlsRef.current.target.set(0, 0, 0)
+      controlsRef.current.target.copy(target)
       controlsRef.current.update()
       controlsRef.current.saveState()
     }
-  }, [camera, controlsRef, size.height, size.width, vertices])
+  }, [camera, controlsRef, placement, size.height, size.width])
 
   return null
 }
 
 export default function ThreeViewer() {
   const { cookieCutter, wireframeMode } = useCookieCutter()
-  const controlsRef = useRef<any>()
+  const controlsRef = useRef<OrbitControls | null>(null)
+  const previewVertices = cookieCutter?.geometry.vertices
+  const previewPlacement = useMemo(
+    () => previewVertices ? calculatePreviewPlacement(previewVertices) : null,
+    [previewVertices]
+  )
+  const cameraTarget = previewPlacement?.target ?? DEFAULT_CAMERA_TARGET
 
   // Reset view function exposed to parent
   useEffect(() => {
-    if (controlsRef.current) {
-      const resetView = () => {
-        controlsRef.current.reset()
-      }
-      // Store reset function in global scope for access
-      ;(window as any).resetThreeView = resetView
+    const resetView = () => controlsRef.current?.reset()
+    window.resetThreeView = resetView
+    return () => {
+      if (window.resetThreeView === resetView) delete window.resetThreeView
     }
   }, [])
 
@@ -122,13 +141,18 @@ export default function ThreeViewer() {
         }}
         className="bg-gradient-to-b from-gray-50 to-gray-100"
       >
-        {/* Enhanced Lighting for Natural Shadows */}
-        <ambientLight intensity={0.4} color="#ffffff" />
+        {/* Soft studio fill keeps both the inner and outer walls readable. */}
+        <ambientLight intensity={0.2} color="#ffffff" />
+        <hemisphereLight
+          color="#ffffff"
+          groundColor="#cbd5e1"
+          intensity={0.55}
+        />
         
         {/* Main key light with stable shadows */}
         <directionalLight
           position={[30, 40, 30]}
-          intensity={1.0}
+          intensity={0.95}
           castShadow
           shadow-mapSize-width={2048}
           shadow-mapSize-height={2048}
@@ -145,14 +169,14 @@ export default function ThreeViewer() {
         {/* Fill light to soften shadows */}
         <directionalLight 
           position={[-20, 30, -20]} 
-          intensity={0.4} 
+          intensity={0.3}
           color="#f0f8ff"
         />
         
         {/* Rim light for better definition */}
         <directionalLight 
           position={[0, 20, -40]} 
-          intensity={0.3} 
+          intensity={0.2}
           color="#fff8f0"
         />
 
@@ -186,15 +210,20 @@ export default function ThreeViewer() {
               geometry={cookieCutter.geometry} 
               wireframe={wireframeMode}
             />
-            <CameraFitter
-              vertices={cookieCutter.geometry.vertices}
-              controlsRef={controlsRef}
-            />
+            {previewPlacement && (
+              <CameraFitter
+                placement={previewPlacement}
+                controlsRef={controlsRef}
+              />
+            )}
           </>
         )}
 
         {/* Simple Controls without Drei */}
-        <SimpleOrbitControls controlsRef={controlsRef} />
+        <SimpleOrbitControls
+          controlsRef={controlsRef}
+          target={cameraTarget}
+        />
       </Canvas>
     </div>
   )
