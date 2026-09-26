@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "tsx --conditions=import --test tests/*.test.ts",
+    "test": "node --require ./scripts/tsx-windows-user-shim.cjs --import tsx --conditions=import --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "replay:references": "tsx --conditions=import --test tests/reference-svg-replay.test.ts",
     "validate:references": "node scripts/validate-reference-manifest.mjs",

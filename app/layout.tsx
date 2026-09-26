@@ -2,10 +2,10 @@ import './globals.css'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
-  title: '🍪 Cookie Cutter Generator',
-  description: 'Design custom cookie cutters for 3D printing with real-time preview',
-  keywords: ['cookie cutter', '3D printing', 'SVG', 'STL', 'design tool'],
-  authors: [{ name: 'Cookie Cutter Generator' }],
+  title: '🍪 DoughForge — Cookie Outcome Designer',
+  description: 'Create registered cookie cutters, royal-icing guides, palettes, and project kits from one design.',
+  keywords: ['cookie cutter', 'royal icing', 'cookie decorating', '3D printing', 'STL', 'design tool'],
+  authors: [{ name: 'DoughForge' }],
   icons: { icon: '/favicon.svg', shortcut: '/favicon.svg' },
 }
 

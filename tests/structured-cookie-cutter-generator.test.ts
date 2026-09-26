@@ -163,6 +163,38 @@ test('generates every outer, hole, and role-separated closed contour', () => {
     result.metadata.elements.flatMap((element) => element.sourceIds),
     ['outer', 'hole', 'stamp-detail']
   )
+  assert.deepEqual(
+    result.sourceOutline.paths.map((path) => ({
+      sourceId: path.sourceId,
+      kind: path.kind,
+      relationship: path.relationship,
+      closed: path.closed,
+      generated: path.generated
+    })),
+    [
+      {
+        sourceId: 'outer',
+        kind: 'closed-contour',
+        relationship: { kind: 'outer' },
+        closed: true,
+        generated: true
+      },
+      {
+        sourceId: 'hole',
+        kind: 'closed-contour',
+        relationship: { kind: 'hole', outerContourId: 'outer' },
+        closed: true,
+        generated: true
+      },
+      {
+        sourceId: 'stamp-detail',
+        kind: 'closed-contour',
+        relationship: { kind: 'outer' },
+        closed: true,
+        generated: true
+      }
+    ]
+  )
 })
 
 test('uses lower role-specific heights for emboss details than the cutting wall', () => {
@@ -414,7 +446,85 @@ test('composes part and assembly transforms without mutating authored points', (
   assert.ok(result.metadata.productionReadiness.reasons.some(
     (reason) => reason.code === 'multipart-export-unsupported'
   ))
+  const firstPath = result.sourceOutline.paths.find((path) => path.sourceId === 'first')
+  const secondPath = result.sourceOutline.paths.find((path) => path.sourceId === 'second')
+  assert.ok(firstPath)
+  assert.ok(secondPath)
+  assert.deepEqual(firstPath.points[0], { x: -35, y: -10 })
+  assert.deepEqual(secondPath.points[0], { x: 15, y: -10 })
   assert.equal(JSON.stringify(design), authoredSnapshot)
+})
+
+test('uses collision-proof source path identities for arbitrary valid IDs', () => {
+  const design = designWithGeometry(
+    [
+      square('d', 'stamp', 0, 0, 5),
+      square('c/d', 'stamp', 0, 0, 5)
+    ],
+    {
+      parts: [
+        { id: 'c', name: 'First path', geometryIds: ['d'] },
+        {
+          id: 'b',
+          name: 'Second path',
+          geometryIds: ['c/d'],
+          transform: [1, 0, 0, 1, 20, 0]
+        }
+      ],
+      assemblies: [
+        { id: 'a/b', name: 'First assembly', partIds: ['c'] },
+        { id: 'a', name: 'Second assembly', partIds: ['b'] }
+      ],
+      canvasWidth: 25,
+      canvasHeight: 5,
+      targetWidth: 50,
+      targetHeight: 10
+    }
+  )
+
+  const result = StructuredCookieCutterGenerator.generate({ design, profile })
+  const ids = result.sourceOutline.paths.map((path) => path.id)
+
+  assert.equal(new Set(ids).size, 2)
+  assert.ok(result.sourceOutline.paths.every((path) => path.generated))
+})
+
+test('marks a source path skipped when another path still produces a preview', () => {
+  const design = designWithGeometry(
+    [
+      square('printable', 'cut', 0, 0, 10),
+      square('collapsed', 'stamp', 0, 0, 10)
+    ],
+    {
+      parts: [
+        { id: 'printable-part', name: 'Printable', geometryIds: ['printable'] },
+        {
+          id: 'collapsed-part',
+          name: 'Collapsed',
+          geometryIds: ['collapsed'],
+          transform: [0, 0, 0, 0, 30, 0]
+        }
+      ],
+      assemblies: [{
+        id: 'main-assembly',
+        name: 'Main assembly',
+        partIds: ['printable-part', 'collapsed-part']
+      }],
+      canvasWidth: 40,
+      canvasHeight: 10,
+      targetWidth: 80,
+      targetHeight: 20
+    }
+  )
+
+  const result = StructuredCookieCutterGenerator.generate({ design, profile })
+  const generated = result.sourceOutline.paths.find((path) => path.sourceId === 'printable')
+  const skipped = result.sourceOutline.paths.find((path) => path.sourceId === 'collapsed')
+
+  assert.equal(result.metadata.generatedElements, 1)
+  assert.equal(result.metadata.skippedElements, 1)
+  assert.equal(generated?.generated, true)
+  assert.equal(skipped?.generated, false)
 })
 
 test('caps an open round-ended stroke as a watertight indexed ribbon prism', () => {
@@ -448,6 +558,28 @@ test('caps an open round-ended stroke as a watertight indexed ribbon prism', () 
   assert.equal(result.metadata.meshQuality.watertight, true)
   assert.equal(result.metadata.meshQuality.connectedComponents, 1)
   assert.equal(result.metadata.productionReadiness.ready, true)
+  assert.deepEqual(
+    result.sourceOutline.paths.map((path) => ({
+      sourceId: path.sourceId,
+      kind: path.kind,
+      role: path.role,
+      closed: path.closed,
+      generated: path.generated,
+      points: path.points
+    })),
+    [{
+      sourceId: 'open-stamp',
+      kind: 'open-stroke',
+      role: 'stamp',
+      closed: false,
+      generated: true,
+      points: [
+        { x: -12, y: -10 },
+        { x: 12, y: -10 },
+        { x: 12, y: 10 }
+      ]
+    }]
+  )
   assert.equal(
     result.metadata.warnings.some((warning) => /bounded miter approximation/.test(warning)),
     false

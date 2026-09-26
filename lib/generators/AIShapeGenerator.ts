@@ -4,6 +4,11 @@
  */
 
 import { closeOutline, cleanClosedOutline } from '@/lib/geometry/outline'
+import {
+  validateAIDecorationGeneration,
+  type AIDecorationGeneration
+} from '@/lib/ai/decorationPlan'
+import type { LegacySingleOutline } from '@/lib/design'
 import { PresetShapes } from './PresetShapes'
 
 interface AIShapeResponse {
@@ -11,10 +16,29 @@ interface AIShapeResponse {
   reasoning: string
   category: string
   generator?: string
+  model?: string
+  decorationGeneration?: unknown
+  decorationWarning?: string
+}
+
+export interface AIGeneratedOutline extends LegacySingleOutline {
+  type: string
+  description: string
+  metadata: {
+    source: string
+    reasoning: string
+    category: string
+    pointCount: number
+    timestamp: number
+    model: string
+    generator: string
+    decorationGeneration?: AIDecorationGeneration
+    decorationWarning?: string
+  }
 }
 
 export class AIShapeGenerator {
-  static async generateFromDescription(description: string): Promise<any> {
+  static async generateFromDescription(description: string): Promise<AIGeneratedOutline> {
     const cleanDescription = description.trim()
     console.log('🤖 OpenAI generating shape for:', cleanDescription)
 
@@ -32,7 +56,7 @@ export class AIShapeGenerator {
     return this.generateProceduralFallback(cleanDescription)
   }
 
-  private static async generateWithOpenAI(description: string): Promise<any> {
+  private static async generateWithOpenAI(description: string): Promise<AIGeneratedOutline> {
     const response = await fetch('/api/generate-shape', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -44,7 +68,7 @@ export class AIShapeGenerator {
       throw new Error(errorBody?.error || `Shape generation failed (${response.status})`)
     }
 
-    const aiData = await response.json() as AIShapeResponse & { model?: string }
+    const aiData = await response.json() as AIShapeResponse
 
     // Validate the response structure
     if (!aiData.points || !Array.isArray(aiData.points) || aiData.points.length < 3) {
@@ -90,7 +114,11 @@ export class AIShapeGenerator {
     }
 
     // Convert to our outline format
-    const outline = {
+    let decorationGeneration: AIDecorationGeneration | undefined
+    if (aiData.decorationGeneration !== undefined) {
+      decorationGeneration = validateAIDecorationGeneration(aiData.decorationGeneration)
+    }
+    const outline: AIGeneratedOutline = {
       type: 'openai-generated',
       description: description,
       points: aiData.points,
@@ -101,7 +129,9 @@ export class AIShapeGenerator {
         pointCount: aiData.points.length,
         timestamp: Date.now(),
         model: aiData.model || 'server-configured',
-        generator: aiData.generator || 'structured-vector'
+        generator: aiData.generator || 'structured-vector',
+        ...(decorationGeneration ? { decorationGeneration } : {}),
+        ...(aiData.decorationWarning ? { decorationWarning: aiData.decorationWarning } : {})
       }
     }
 
@@ -109,7 +139,7 @@ export class AIShapeGenerator {
     return outline
   }
 
-  private static generateProceduralFallback(description: string): any {
+  private static generateProceduralFallback(description: string): AIGeneratedOutline {
     console.log('🔄 Using procedural fallback for:', description)
     
     // Simple pattern matching for common shapes
@@ -133,7 +163,15 @@ export class AIShapeGenerator {
         ...PresetShapes.butterfly(),
         type: 'procedural-butterfly',
         description,
-        metadata: { source: 'procedural-butterfly', timestamp: Date.now() }
+        metadata: {
+          source: 'procedural-butterfly',
+          reasoning: 'Local printable butterfly fallback',
+          category: 'animal',
+          pointCount: PresetShapes.butterfly().points.length,
+          timestamp: Date.now(),
+          model: 'local-procedural',
+          generator: 'procedural-butterfly'
+        }
       }
     }
 
@@ -141,34 +179,42 @@ export class AIShapeGenerator {
   }
 
   // Basic shape generators for fallback
-  private static createBasicCat(description: string): any {
+  private static createBasicCat(description: string): AIGeneratedOutline {
+    const points = [
+      {x: 0, y: 20}, {x: -15, y: 25}, {x: -20, y: 15}, {x: -25, y: 5},
+      {x: -20, y: -5}, {x: -30, y: -20}, {x: -25, y: -10}, {x: -15, y: -15},
+      {x: 0, y: -18}, {x: 15, y: -15}, {x: 25, y: -10}, {x: 30, y: -20},
+      {x: 20, y: -5}, {x: 25, y: 5}, {x: 20, y: 15}, {x: 15, y: 25}, {x: 0, y: 20}
+    ]
     return {
       type: 'procedural-cat',
       description: description,
-      points: [
-        {x: 0, y: 20}, {x: -15, y: 25}, {x: -20, y: 15}, {x: -25, y: 5},
-        {x: -20, y: -5}, {x: -30, y: -20}, {x: -25, y: -10}, {x: -15, y: -15},
-        {x: 0, y: -18}, {x: 15, y: -15}, {x: 25, y: -10}, {x: 30, y: -20},
-        {x: 20, y: -5}, {x: 25, y: 5}, {x: 20, y: 15}, {x: 15, y: 25}, {x: 0, y: 20}
-      ],
-      metadata: { source: 'procedural-cat', timestamp: Date.now() }
+      points,
+      metadata: {
+        source: 'procedural-cat', reasoning: 'Local printable cat fallback', category: 'animal',
+        pointCount: points.length, timestamp: Date.now(), model: 'local-procedural', generator: 'procedural-cat'
+      }
     }
   }
 
-  private static createBasicHeart(description: string): any {
+  private static createBasicHeart(description: string): AIGeneratedOutline {
+    const points = [
+      {x: 0, y: 20}, {x: -15, y: 10}, {x: -20, y: 0}, {x: -15, y: -10},
+      {x: -8, y: -15}, {x: 0, y: -8}, {x: 8, y: -15}, {x: 15, y: -10},
+      {x: 20, y: 0}, {x: 15, y: 10}, {x: 0, y: 20}
+    ]
     return {
       type: 'procedural-heart',
       description: description,
-      points: [
-        {x: 0, y: 20}, {x: -15, y: 10}, {x: -20, y: 0}, {x: -15, y: -10},
-        {x: -8, y: -15}, {x: 0, y: -8}, {x: 8, y: -15}, {x: 15, y: -10},
-        {x: 20, y: 0}, {x: 15, y: 10}, {x: 0, y: 20}
-      ],
-      metadata: { source: 'procedural-heart', timestamp: Date.now() }
+      points,
+      metadata: {
+        source: 'procedural-heart', reasoning: 'Local printable heart fallback', category: 'abstract',
+        pointCount: points.length, timestamp: Date.now(), model: 'local-procedural', generator: 'procedural-heart'
+      }
     }
   }
 
-  private static createBasicStar(description: string): any {
+  private static createBasicStar(description: string): AIGeneratedOutline {
     const points = []
     for (let i = 0; i < 10; i++) {
       const angle = (i / 10) * 2 * Math.PI
@@ -184,11 +230,14 @@ export class AIShapeGenerator {
       type: 'procedural-star',
       description: description,
       points: points,
-      metadata: { source: 'procedural-star', timestamp: Date.now() }
+      metadata: {
+        source: 'procedural-star', reasoning: 'Local printable star fallback', category: 'abstract',
+        pointCount: points.length, timestamp: Date.now(), model: 'local-procedural', generator: 'procedural-star'
+      }
     }
   }
 
-  private static createBasicCircle(description: string): any {
+  private static createBasicCircle(description: string): AIGeneratedOutline {
     const points = []
     for (let i = 0; i < 32; i++) {
       const angle = (i / 32) * 2 * Math.PI
@@ -203,7 +252,10 @@ export class AIShapeGenerator {
       type: 'procedural-circle',
       description: description,
       points: points,
-      metadata: { source: 'procedural-circle', timestamp: Date.now() }
+      metadata: {
+        source: 'procedural-circle', reasoning: 'Local printable circle fallback', category: 'abstract',
+        pointCount: points.length, timestamp: Date.now(), model: 'local-procedural', generator: 'procedural-circle'
+      }
     }
   }
 }

@@ -27,7 +27,7 @@ export default function OutlineTab() {
     setStatus, 
     loadPresetShape,
     loadDesign,
-    loadLegacyOutline,
+    loadGeneratedOutline,
     generateCookieCutter 
   } = useCookieCutter()
   
@@ -93,7 +93,7 @@ export default function OutlineTab() {
     if (!aiDescription.trim()) return
 
     setIsGenerating(true)
-    setStatus('Generating AI shape...')
+    setStatus('Generating cutter and registered cookie outcome...')
 
     try {
       const { AIShapeGenerator } = await import('@/lib/generators/AIShapeGenerator')
@@ -101,12 +101,12 @@ export default function OutlineTab() {
 
       if (outline) {
         const source = outline.metadata?.source
-        loadLegacyOutline(
+        loadGeneratedOutline(
           outline,
           aiDescription.trim(),
           source === 'openai-server'
-            ? `Generated AI outline: "${aiDescription.trim()}"`
-            : `Generated printable fallback for: "${aiDescription.trim()}"`
+            ? `Generated and ranked high-fidelity cookie project: "${aiDescription.trim()}"`
+            : `Generated printable project fallback for: "${aiDescription.trim()}"`
         )
       } else {
         setStatus('Error: Could not generate shape from description')
@@ -117,7 +117,7 @@ export default function OutlineTab() {
     } finally {
       setIsGenerating(false)
     }
-  }, [aiDescription, setStatus, loadLegacyOutline])
+  }, [aiDescription, setStatus, loadGeneratedOutline])
 
   return (
     <div className="space-y-6">
@@ -253,7 +253,7 @@ export default function OutlineTab() {
       {outlineMethod === 'ai' && (
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            Describe Your Cookie Cutter Shape
+            Describe the Cookies You Want
           </label>
           
           {/* AI Generation Tips */}
@@ -264,18 +264,18 @@ export default function OutlineTab() {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium text-purple-800 mb-1">
-                  ✨ AI Shape Examples:
+                  ✨ Cookie Project Examples:
                 </p>
                 <p className="mb-2 text-xs text-purple-700">
-                  Prompt generation currently creates one outer cutting silhouette. Use a
-                  role-tagged SVG for holes and internal stamp details in this milestone.
+                  DoughForge uses the generated outline as the shared coordinate frame for the
+                  decorated preview, guide, palette, and cutter. Prototype color recipes remain
+                  locked from checkout until they are physically verified.
                 </p>
                 <ul className="text-xs text-purple-700 space-y-1">
-                  <li>• &ldquo;A majestic lion with flowing mane&rdquo;</li>
-                  <li>• &ldquo;Graceful ballet dancer in mid-leap&rdquo;</li>
-                  <li>• &ldquo;Vintage steam locomotive&rdquo;</li>
-                  <li>• &ldquo;Cozy cottage with chimney smoke&rdquo;</li>
-                  <li>• &ldquo;Intricate snowflake pattern&rdquo;</li>
+                  <li>• &ldquo;Woodland first birthday in sage, cream, and dusty rose&rdquo;</li>
+                  <li>• &ldquo;Lavender butterfly with pink piped wing details&rdquo;</li>
+                  <li>• &ldquo;Navy and gold graduation stars with class year&rdquo;</li>
+                  <li>• &ldquo;Soft pink heart cookies for a bridal shower&rdquo;</li>
                 </ul>
               </div>
             </div>
@@ -283,7 +283,7 @@ export default function OutlineTab() {
           
           <div className="space-y-4">
             <textarea
-              placeholder="Describe any shape you can imagine... (e.g., 'a majestic dragon breathing fire' or 'an elegant unicorn with flowing tail')"
+              placeholder="Describe the subject, occasion, colors, and personalization..."
               className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 min-h-[100px] text-sm resize-none"
               value={aiDescription}
               onChange={(e) => setAiDescription(e.target.value)}
@@ -301,12 +301,12 @@ export default function OutlineTab() {
               {isGenerating ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Generating Shape...
+                  Building Cookie Project...
                 </>
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  Generate Cookie Cutter Shape
+                  Create Cookie Project
                 </>
               )}
             </button>

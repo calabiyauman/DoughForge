@@ -1,5 +1,10 @@
 import OpenAI from 'openai'
-import { createHash } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
+import {
+  AI_DECORATION_RESULT_SCHEMA,
+  validateAIDecorationModelResult,
+  type AIDecorationGeneration
+} from '@/lib/ai/decorationPlan'
 import {
   closeOutline,
   cleanClosedOutline,
@@ -165,6 +170,93 @@ function validateShape(value: unknown): ShapeResponse {
   }
 }
 
+function normalizedOutlineForDecoration(points: readonly Point[]): Point[] {
+  const openPoints = points.length > 1
+    && Math.abs(points[0].x - points[points.length - 1].x) < 0.001
+    && Math.abs(points[0].y - points[points.length - 1].y) < 0.001
+    ? points.slice(0, -1)
+    : [...points]
+  const xs = openPoints.map((point) => point.x)
+  const ys = openPoints.map((point) => point.y)
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+  const width = Math.max(0.001, maxX - minX)
+  const height = Math.max(0.001, maxY - minY)
+  const sampleEvery = Math.max(1, Math.ceil(openPoints.length / 48))
+  return openPoints
+    .filter((_, index) => index % sampleEvery === 0)
+    .map((point) => ({
+      x: Number(((point.x - minX) / width).toFixed(4)),
+      y: Number(((point.y - minY) / height).toFixed(4))
+    }))
+}
+
+async function generateDecorationCandidates(
+  openai: OpenAI,
+  model: string,
+  description: string,
+  shape: ShapeResponse,
+  safetyIdentifier: string
+): Promise<AIDecorationGeneration> {
+  const generationId = randomUUID()
+  const createdAt = new Date().toISOString()
+  const outline = normalizedOutlineForDecoration(shape.points)
+  const response = await openai.responses.create({
+    model,
+    store: false,
+    safety_identifier: safetyIdentifier,
+    instructions: [
+      'You are a senior custom sugar-cookie decorator and production design planner.',
+      'Create exactly three distinct royal-icing decoration candidates registered to the supplied normalized exterior outline.',
+      'The normalized design canvas uses x=0..1 left-to-right and y=0..1 bottom-to-top.',
+      'Treat the cutter outline as authoritative. Keep every detail comfortably inside it and preserve recognizable subject anatomy.',
+      'Use 4 to 6 coordinated colors. The base color slot is required. Never invent brands, product SKUs, prices, recipes, or safety claims.',
+      'Use flood regions for large areas, wet-on-wet for small flat marks, and piped-detail for raised line-work.',
+      'Prefer practical custom-cookie techniques: sectioned floods, wet-on-wet accents, rounded monoline details, simplified florals, and registered transfers.',
+      'Use standard deposited line widths near 1.5 to 2 mm. Reserve 0.7 to 1 mm lines for a genuinely detailed candidate.',
+      'Avoid isolated flooded islands narrower than roughly 4 mm, cramped negative spaces, acute cusps, excessive micro-dots, and overlapping same-layer shapes.',
+      'Lettering must use short user-requested copy only. Prefer monoline sans, monoline script, rounded block, or simplified faux calligraphy.',
+      'Keep piped lettering at least 7 mm high when space permits, with open counters and no hairline strokes.',
+      'Use transfers or edible marker lettering when the requested copy is too dense for direct piping.',
+      'For a character or icon, prioritize the two to five internal features that make it unmistakable.',
+      'Candidate one should be commercially clean and approachable, candidate two more detailed, and candidate three a stylistic alternative.',
+      'Return geometry and design intent only. DoughForge will build steps, color recipes, scoring, and commerce data deterministically.'
+    ].join(' '),
+    input: [
+      `Customer request: ${description}`,
+      `Validated cutter category: ${shape.category}`,
+      `Normalized exterior outline (${outline.length} points): ${JSON.stringify(outline)}`,
+      'All candidate point coordinates and centers must lie between 0.04 and 0.96.'
+    ].join('\n'),
+    max_output_tokens: 8_000,
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'cookie_decoration_candidates',
+        strict: true,
+        schema: AI_DECORATION_RESULT_SCHEMA
+      }
+    }
+  })
+  if (!response.output_text) throw new Error('OpenAI returned no structured decoration output')
+  const result = validateAIDecorationModelResult(JSON.parse(response.output_text))
+  return {
+    generationId,
+    model,
+    createdAt,
+    candidates: result.candidates,
+    usage: response.usage
+      ? {
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+          totalTokens: response.usage.total_tokens
+        }
+      : undefined
+  }
+}
+
 export async function POST(request: Request) {
   const contentLength = Number(request.headers.get('content-length') || 0)
   if (contentLength > MAX_BODY_BYTES) {
@@ -210,11 +302,16 @@ export async function POST(request: Request) {
 
   const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini'
   const imageModel = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2'
+  const decorationModel = process.env.OPENAI_DECORATION_MODEL || model
   const subjectHint = getSubjectHint(description)
 
   try {
     const openai = new OpenAI({ apiKey })
     let lastError: unknown
+    let shape: ShapeResponse | undefined
+    let generator = 'structured-vector'
+    let outlineModel = model
+    const safetyIdentifier = createHash('sha256').update(clientIp).digest('hex').slice(0, 64)
 
     try {
       const result = await openai.images.generate({
@@ -234,7 +331,6 @@ export async function POST(request: Request) {
       if (!encodedImage) throw new Error('OpenAI returned no silhouette image')
 
       const imageBuffer = Buffer.from(encodedImage, 'base64')
-      let shape: ShapeResponse | undefined
       let traceError: unknown
       for (const closingRadius of [0, 4, 8, 12, 18, 24, 30]) {
         try {
@@ -257,21 +353,19 @@ export async function POST(request: Request) {
         }
       }
       if (!shape) throw traceError ?? new Error('Generated silhouette could not be made printable')
-      return Response.json(
-        { ...shape, model: imageModel, generator: 'image-trace' },
-        { headers: { 'Cache-Control': 'no-store' } }
-      )
+      generator = 'image-trace'
+      outlineModel = imageModel
     } catch (error) {
       lastError = error
       console.warn('Image silhouette generation was rejected; trying vector fallback', error)
     }
 
-    for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; !shape && attempt < MAX_GENERATION_ATTEMPTS; attempt += 1) {
       try {
         const response = await openai.responses.create({
           model,
           store: false,
-          safety_identifier: createHash('sha256').update(clientIp).digest('hex').slice(0, 64),
+          safety_identifier: safetyIdentifier,
           instructions: [
             'You design simple cookie-cutter silhouettes.',
             'Return one recognizable closed clockwise outline centered near the origin.',
@@ -308,17 +402,39 @@ export async function POST(request: Request) {
           throw new Error('OpenAI returned no structured output')
         }
 
-        const shape = validateShape(JSON.parse(response.output_text))
-        return Response.json(
-          { ...shape, model },
-          { headers: { 'Cache-Control': 'no-store' } }
-        )
+        shape = validateShape(JSON.parse(response.output_text))
       } catch (error) {
         lastError = error
       }
     }
 
-    throw lastError
+    if (!shape) throw lastError ?? new Error('OpenAI returned no printable outline')
+
+    let decorationGeneration: AIDecorationGeneration | undefined
+    let decorationWarning: string | undefined
+    try {
+      decorationGeneration = await generateDecorationCandidates(
+        openai,
+        decorationModel,
+        description,
+        shape,
+        safetyIdentifier
+      )
+    } catch (error) {
+      decorationWarning = 'The cutter was generated, but high-fidelity decoration planning fell back to the local planner.'
+      console.warn('Structured decoration generation failed; returning printable outline fallback', error)
+    }
+
+    return Response.json(
+      {
+        ...shape,
+        model: outlineModel,
+        generator,
+        decorationGeneration,
+        decorationWarning
+      },
+      { headers: { 'Cache-Control': 'no-store' } }
+    )
   } catch (error) {
     console.error('OpenAI shape generation failed', error)
     return Response.json({ error: 'AI generation failed. Please try again.' }, { status: 502 })

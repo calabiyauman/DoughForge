@@ -15,8 +15,15 @@ import {
   type DesignSpec,
   type LegacySingleOutline
 } from '@/lib/design'
+import {
+  createAIEnhancedCookieProject,
+  createPrototypeCookieProject,
+  rebaseCookieProjectDesign
+} from '@/lib/project'
+import type { CookieProjectRevision } from '@/lib/project/types'
 import { serializeAsciiSTL, serializeOBJ } from '@/lib/exporters/meshExport'
 import { PresetShapes } from '@/lib/generators/PresetShapes'
+import type { AIGeneratedOutline } from '@/lib/generators/AIShapeGenerator'
 import { ProfileGenerator, type Profile } from '@/lib/generators/ProfileGenerator'
 import {
   StructuredCookieCutterGenerator,
@@ -33,6 +40,7 @@ export type { CookieCutterParameters } from './cookieCutterParameters'
 
 interface CookieCutterState {
   design: DesignSpec | null
+  outcomeProject: CookieProjectRevision | null
   profile: Profile | null
   cookieCutter: StructuredCookieCutter | null
   status: string
@@ -48,8 +56,14 @@ interface CookieCutterContextType extends CookieCutterState {
   setStatus: (status: string) => void
   loadPresetShape: (shape: string) => void
   loadDesign: (design: DesignSpec, status?: string) => void
-  loadProject: (design: DesignSpec | null, parameters: unknown, status?: string) => void
+  loadProject: (
+    design: DesignSpec | null,
+    parameters: unknown,
+    status?: string,
+    outcomeProject?: CookieProjectRevision | null
+  ) => void
   loadLegacyOutline: (outline: LegacySingleOutline, name?: string, status?: string) => void
+  loadGeneratedOutline: (outline: AIGeneratedOutline, name?: string, status?: string) => void
   exportSTL: () => void
   exportOBJ: () => void
 }
@@ -75,6 +89,29 @@ function generateFromDesign(
     angleThreshold: parameters.angleThreshold
   })
   return { design: effectiveDesign, profile, cookieCutter }
+}
+
+function projectFromDesign(
+  design: DesignSpec,
+  previous: CookieProjectRevision | null | undefined,
+  physicalScale: number
+): CookieProjectRevision {
+  if (previous) {
+    const rebased = rebaseCookieProjectDesign(previous, design, physicalScale)
+    if (rebased) return rebased
+  }
+  return createPrototypeCookieProject(design, {
+    prompt: previous?.brief.prompt
+      ?? design.provenance.generator?.prompt
+      ?? design.name,
+    title: previous?.brief.title ?? design.name,
+    difficulty: previous?.brief.difficulty,
+    requestedColors: previous?.brief.requestedColors,
+    createdAt: previous?.createdAt,
+    projectId: previous?.projectId,
+    revisionNumber: previous?.revisionNumber,
+    physicalScale
+  })
 }
 
 function errorMessage(error: unknown): string {
@@ -126,6 +163,7 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
   const initialized = useRef(false)
   const [state, setState] = useState<CookieCutterState>({
     design: null,
+    outcomeProject: null,
     profile: null,
     cookieCutter: null,
     status: 'Ready — select an outline to begin',
@@ -141,9 +179,11 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
     setState((previous) => {
       try {
         const generated = generateFromDesign(design, previous.parameters)
+        const outcomeProject = projectFromDesign(generated.design, null, previous.parameters.scale)
         return {
           ...previous,
           ...generated,
+          outcomeProject,
           status: generationStatus(successStatus, generated.cookieCutter)
         }
       } catch (error) {
@@ -159,7 +199,8 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
   const loadProject = useCallback((
     design: DesignSpec | null,
     projectParameters: unknown,
-    successStatus = 'Project loaded successfully'
+    successStatus = 'Project loaded successfully',
+    savedOutcomeProject?: CookieProjectRevision | null
   ) => {
     // Validate outside the state updater so callers can report malformed files
     // without partially mutating the current project.
@@ -171,10 +212,14 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
       }
       try {
         const generated = generateFromDesign(projectDesign, parameters)
+        const outcomeProject = savedOutcomeProject
+          ? rebaseCookieProjectDesign(savedOutcomeProject, generated.design, parameters.scale) ?? savedOutcomeProject
+          : projectFromDesign(generated.design, previous.outcomeProject, parameters.scale)
         return {
           ...previous,
           parameters,
           ...generated,
+          outcomeProject,
           status: generationStatus(successStatus, generated.cookieCutter)
         }
       } catch (error) {
@@ -201,6 +246,49 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
     }
   }, [loadDesign, setStatus])
 
+  const loadGeneratedOutline = useCallback((
+    outline: AIGeneratedOutline,
+    name?: string,
+    successStatus?: string
+  ) => {
+    try {
+      const design = designSpecFromLegacyOutline(outline, {
+        name: name || outline.description || outline.type || 'AI-generated cookie',
+        sourceName: name || outline.description || outline.type || 'AI-generated cookie'
+      })
+      setState((previous) => {
+        try {
+          const generated = generateFromDesign(design, previous.parameters)
+          const outcomeProject = outline.metadata.decorationGeneration
+            ? createAIEnhancedCookieProject(generated.design, outline.metadata.decorationGeneration, {
+                prompt: outline.description,
+                title: name || outline.description,
+                physicalScale: previous.parameters.scale
+              })
+            : projectFromDesign(generated.design, null, previous.parameters.scale)
+          const score = outcomeProject.metadata?.selectedCandidateScore
+          const scoreSuffix = typeof score === 'number' ? ` — selected decoration score ${score}/100` : ''
+          const warningSuffix = outline.metadata.decorationWarning ? ` — ${outline.metadata.decorationWarning}` : ''
+          return {
+            ...previous,
+            ...generated,
+            outcomeProject,
+            status: generationStatus(
+              `${successStatus ?? `Generated AI cookie project: ${design.name}`}${scoreSuffix}${warningSuffix}`,
+              generated.cookieCutter
+            )
+          }
+        } catch (error) {
+          console.error('Error loading generated cookie project:', error)
+          return { ...previous, status: `Could not build AI cookie project: ${errorMessage(error)}` }
+        }
+      })
+    } catch (error) {
+      console.error('Error adapting generated outline:', error)
+      setStatus(`Could not load AI outline: ${errorMessage(error)}`)
+    }
+  }, [setStatus])
+
   const loadPresetShape = useCallback((shape: string) => {
     try {
       const outline = PresetShapes.generate(shape)
@@ -220,10 +308,12 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
         )
         if (!previous.design || !previous.cookieCutter) return { ...previous, parameters }
         const generated = generateFromDesign(previous.design, parameters)
+        const outcomeProject = projectFromDesign(generated.design, previous.outcomeProject, parameters.scale)
         return {
           ...previous,
           parameters,
           ...generated,
+          outcomeProject,
           status: generationStatus('Parameters updated successfully', generated.cookieCutter)
         }
       } catch (error) {
@@ -241,9 +331,11 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
       if (!previous.design) return { ...previous, status: 'Ready — select an outline to begin' }
       try {
         const generated = generateFromDesign(previous.design, previous.parameters)
+        const outcomeProject = projectFromDesign(generated.design, previous.outcomeProject, previous.parameters.scale)
         return {
           ...previous,
           ...generated,
+          outcomeProject,
           status: generationStatus('Cookie cutter regenerated successfully', generated.cookieCutter)
         }
       } catch (error) {
@@ -337,6 +429,7 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
     loadDesign,
     loadProject,
     loadLegacyOutline,
+    loadGeneratedOutline,
     exportSTL,
     exportOBJ
   }), [
@@ -350,6 +443,7 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
     loadDesign,
     loadProject,
     loadLegacyOutline,
+    loadGeneratedOutline,
     exportSTL,
     exportOBJ
   ])

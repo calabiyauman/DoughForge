@@ -4,9 +4,11 @@ import { useRef, useEffect, useMemo, type MutableRefObject } from 'react'
 import { Canvas, extend, useThree } from '@react-three/fiber'
 import { useCookieCutter } from '@/lib/context/CookieCutterContext'
 import CookieCutterMesh from './CookieCutterMesh'
+import DesignOutlineOverlay from './DesignOutlineOverlay'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { calculatePreviewPlacement } from '@/lib/geometry/previewPlacement'
+import { includeDesignPathsInPreviewFraming } from '@/lib/geometry/designOutlinePreview'
 
 // Extend Three.js objects for JSX usage
 extend({ GridHelper: THREE.GridHelper })
@@ -103,7 +105,11 @@ function CameraFitter({
   return null
 }
 
-export default function ThreeViewer() {
+export interface ThreeViewerProps {
+  showSourceOutline?: boolean
+}
+
+export default function ThreeViewer({ showSourceOutline = false }: ThreeViewerProps) {
   const { cookieCutter, wireframeMode } = useCookieCutter()
   const controlsRef = useRef<OrbitControls | null>(null)
   const previewVertices = cookieCutter?.geometry.vertices
@@ -111,7 +117,16 @@ export default function ThreeViewer() {
     () => previewVertices ? calculatePreviewPlacement(previewVertices) : null,
     [previewVertices]
   )
-  const cameraTarget = previewPlacement?.target ?? DEFAULT_CAMERA_TARGET
+  const cameraPlacement = useMemo(() => {
+    if (!previewPlacement || !showSourceOutline || !cookieCutter) {
+      return previewPlacement
+    }
+    return includeDesignPathsInPreviewFraming(
+      previewPlacement,
+      cookieCutter.sourceOutline.paths
+    )
+  }, [cookieCutter, previewPlacement, showSourceOutline])
+  const cameraTarget = cameraPlacement?.target ?? DEFAULT_CAMERA_TARGET
 
   // Reset view function exposed to parent
   useEffect(() => {
@@ -210,9 +225,15 @@ export default function ThreeViewer() {
               geometry={cookieCutter.geometry} 
               wireframe={wireframeMode}
             />
-            {previewPlacement && (
-              <CameraFitter
+            {showSourceOutline && previewPlacement && (
+              <DesignOutlineOverlay
+                paths={cookieCutter.sourceOutline.paths}
                 placement={previewPlacement}
+              />
+            )}
+            {cameraPlacement && (
+              <CameraFitter
+                placement={cameraPlacement}
                 controlsRef={controlsRef}
               />
             )}

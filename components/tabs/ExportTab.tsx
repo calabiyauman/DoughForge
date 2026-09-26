@@ -4,6 +4,11 @@ import { useState } from 'react'
 import { Download, Save, Upload, Settings, FileText } from 'lucide-react'
 import { useCookieCutter } from '@/lib/context/CookieCutterContext'
 import { parseDesignSpec } from '@/lib/design'
+import {
+  validateCookieProjectRevision
+} from '@/lib/project/validation'
+import { canonicalJsonStringify } from '@/lib/project/hash'
+import type { CookieProjectRevision } from '@/lib/project/types'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -41,6 +46,7 @@ export default function ExportTab() {
     exportOBJ, 
     cookieCutter,
     design,
+    outcomeProject,
     loadProject: loadProjectState
   } = useCookieCutter()
   
@@ -52,8 +58,9 @@ export default function ExportTab() {
         name: projectName,
         parameters,
         design,
+        outcomeProject,
         timestamp: new Date().toISOString(),
-        version: '3.0.0'
+        version: '4.0.0'
       }
 
       downloadProject(
@@ -91,12 +98,30 @@ export default function ExportTab() {
         const loadedName = typeof projectData.name === 'string'
           ? projectData.name.trim()
           : loadedDesign?.name || 'loaded-project'
+        let loadedOutcomeProject: CookieProjectRevision | null = null
+        if (projectData.outcomeProject !== undefined && projectData.outcomeProject !== null) {
+          if (!isRecord(projectData.outcomeProject)) {
+            throw new Error('Saved cookie outcome must be a JSON object')
+          }
+          const candidate = projectData.outcomeProject as unknown as CookieProjectRevision
+          const report = validateCookieProjectRevision(candidate)
+          if (report.status === 'fail') {
+            throw new Error(report.issues[0]?.message ?? 'Saved cookie outcome is invalid')
+          }
+          loadedOutcomeProject = candidate
+        }
+        const outcomeDesign = loadedOutcomeProject?.designs[0]?.designSpec
+        if (loadedDesign && outcomeDesign && canonicalJsonStringify(loadedDesign) !== canonicalJsonStringify(outcomeDesign)) {
+          throw new Error('Saved cutter and cookie outcome do not reference the same design revision')
+        }
+        const effectiveDesign = outcomeDesign ?? loadedDesign
         loadProjectState(
-          loadedDesign,
+          effectiveDesign,
           projectData.parameters ?? {},
-          loadedDesign
-            ? `Loaded project: ${loadedName || loadedDesign.name}`
-            : `Migrated legacy project settings: ${loadedName || 'loaded project'}`
+          effectiveDesign
+            ? `Loaded project: ${loadedName || effectiveDesign.name}`
+            : `Migrated legacy project settings: ${loadedName || 'loaded project'}`,
+          loadedOutcomeProject
         )
         setProjectName(loadedName || loadedDesign?.name || 'loaded-project')
       } catch (error) {

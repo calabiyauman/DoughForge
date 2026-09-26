@@ -126,8 +126,31 @@ export interface StructuredGenerationMetadata {
   warnings: string[]
 }
 
+/**
+ * The authored 2D design after the exact part, assembly, target-fit, and user
+ * scale transforms used by the geometry generator. Design X/Y maps to model
+ * X/Z; model Y remains the vertical print axis.
+ */
+export interface SourceOutlinePath {
+  id: string
+  sourceId: string
+  assemblyId: string
+  partId: string
+  kind: 'closed-contour' | 'open-stroke'
+  role: DesignRole
+  relationship?: ClosedContour['relationship']
+  closed: boolean
+  generated: boolean
+  points: Point2D[]
+}
+
+export interface SourceOutlineProjection {
+  paths: SourceOutlinePath[]
+}
+
 export interface StructuredCookieCutter {
   geometry: Geometry
+  sourceOutline: SourceOutlineProjection
   metadata: StructuredGenerationMetadata
 }
 
@@ -179,6 +202,14 @@ interface RoleGeometryDefinition {
   height: number
   thickness: number
   profile: Profile
+}
+
+function sourceOutlinePathId(
+  assemblyId: string,
+  partId: string,
+  sourceId: string
+): string {
+  return JSON.stringify([assemblyId, partId, sourceId])
 }
 
 function multiplyTransforms(left: Transform2D, right: Transform2D): Transform2D {
@@ -1130,6 +1161,24 @@ export class StructuredCookieCutterGenerator {
       ...element,
       points: element.points.map((point) => fitPoint(point, fit))
     }))
+    const sourceOutlinePaths: SourceOutlinePath[] = fittedElements.map((element) => ({
+      id: sourceOutlinePathId(
+        element.assemblyId,
+        element.partId,
+        element.source.id
+      ),
+      sourceId: element.source.id,
+      assemblyId: element.assemblyId,
+      partId: element.partId,
+      kind: element.source.kind,
+      role: element.source.role,
+      ...(element.source.kind === 'closed-contour'
+        ? { relationship: { ...element.source.relationship } }
+        : {}),
+      closed: element.source.kind === 'closed-contour',
+      generated: false,
+      points: element.points.map((point) => ({ ...point }))
+    }))
     const roleDefinitions = createRoleDefinitions(design, profile)
     const roleCounts = createRoleCounts()
     const elements: GeneratedElementMetadata[] = []
@@ -1443,10 +1492,25 @@ export class StructuredCookieCutterGenerator {
       DESIGN_ROLES.map((role) => [role, roleDefinitions[role].height])
     ) as Record<DesignRole, number>
     const meshQuality = summarizeMeshQuality(geometry)
+    const generatedSourcePathIds = new Set(contributions.flatMap((contribution) => (
+      contribution.sourceIds.map(
+        (sourceId) => sourceOutlinePathId(
+          contribution.assemblyId,
+          contribution.partId,
+          sourceId
+        )
+      )
+    )))
     for (const reason of readinessReasons) warnings.push(reason.message)
 
     return {
       geometry,
+      sourceOutline: {
+        paths: sourceOutlinePaths.map((path) => ({
+          ...path,
+          generated: generatedSourcePathIds.has(path.id)
+        }))
+      },
       metadata: {
         vertices: geometry.vertices.length / 3,
         faces: geometry.faces.length / 3,
