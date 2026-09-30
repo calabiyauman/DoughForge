@@ -22,13 +22,15 @@ function candidate(id: string, text: string, offset: number): AIDecorationCandid
     id,
     name: `${id} butterfly plan`,
     concept: 'Symmetrical wing sections with a centered monoline name and piped body.',
+    subject: 'butterfly',
+    recognitionStrategy: 'Use a long central body, paired wing contour detail, wing spots, and two-sided symmetry.',
     difficulty: id === 'candidate-2' ? 'detailed' : 'easy',
     estimatedMinutes: 55 + offset,
     paletteName: `${id} palette`,
     palette: [
       { slot: 'base', name: 'Lavender', hex: '#B9A5D2' },
       { slot: 'outline', name: 'Plum', hex: '#5B3A70' },
-      { slot: 'accent', name: 'Blush', hex: '#EBA6B6' },
+      { slot: 'accent', name: 'Berry', hex: '#7A2F55' },
       { slot: 'neutral', name: 'Cream', hex: '#F5E7C8' },
     ],
     regions: [
@@ -40,7 +42,7 @@ function candidate(id: string, text: string, offset: number): AIDecorationCandid
         centerY: 0.5,
         radiusX: 0.045,
         radiusY: 0.24,
-        points: [],
+        points: [{ x: 0.46, y: 0.5 }, { x: 0.5, y: 0.74 }, { x: 0.54, y: 0.5 }],
         colorSlot: 'outline',
         technique: 'piped-detail',
         layer: 2,
@@ -53,22 +55,34 @@ function candidate(id: string, text: string, offset: number): AIDecorationCandid
         centerY: 0.6,
         radiusX: 0.055,
         radiusY: 0.045,
-        points: [],
+        points: [{ x: 0.29, y: 0.6 }, { x: 0.34, y: 0.65 }, { x: 0.39, y: 0.6 }],
         colorSlot: 'accent',
         technique: 'wet-on-wet',
         layer: 0,
       },
     ],
-    strokes: [{
-      id: `${id}-wing-line`,
-      name: 'Wing contour',
-      points: [{ x: 0.32, y: 0.42 }, { x: 0.38, y: 0.51 }, { x: 0.42, y: 0.63 }],
-      widthMm: 1.5,
-      colorSlot: 'neutral',
-      closed: false,
-      technique: 'piped-detail',
-      layer: 2,
-    }],
+    strokes: [
+      {
+        id: `${id}-wing-line`,
+        name: 'Left wing contour',
+        points: [{ x: 0.32, y: 0.42 }, { x: 0.38, y: 0.51 }, { x: 0.42, y: 0.63 }],
+        widthMm: 1.5,
+        colorSlot: 'neutral',
+        closed: false,
+        technique: 'piped-detail',
+        layer: 2,
+      },
+      {
+        id: `${id}-wing-line-right`,
+        name: 'Right wing contour',
+        points: [{ x: 0.68, y: 0.42 }, { x: 0.62, y: 0.51 }, { x: 0.58, y: 0.63 }],
+        widthMm: 1.5,
+        colorSlot: 'neutral',
+        closed: false,
+        technique: 'piped-detail',
+        layer: 2,
+      },
+    ],
     lettering: [{
       id: `${id}-name`,
       name: 'Personalized name',
@@ -84,6 +98,36 @@ function candidate(id: string, text: string, offset: number): AIDecorationCandid
       rotationDegrees: 0,
       layer: 3,
     }],
+    semanticFeatures: [
+      {
+        id: `${id}-feature-body`,
+        name: 'Butterfly body',
+        description: 'Long centered body that anchors the paired wings.',
+        role: 'signature',
+        geometryIds: [`${id}-body`],
+      },
+      {
+        id: `${id}-feature-wings`,
+        name: 'Butterfly wing contour',
+        description: 'Curved interior line that makes the paired wing structure readable.',
+        role: 'signature',
+        geometryIds: [`${id}-wing-line`, `${id}-wing-line-right`],
+      },
+      {
+        id: `${id}-feature-spot`,
+        name: 'Wing spot',
+        description: 'Playful wet-on-wet marking on the wing.',
+        role: 'supporting',
+        geometryIds: [`${id}-wing-dot`],
+      },
+      {
+        id: `${id}-feature-name`,
+        name: 'Personalized name',
+        description: 'Celebratory custom lettering requested by the customer.',
+        role: 'accent',
+        geometryIds: [`${id}-name`],
+      },
+    ],
   }
 }
 
@@ -149,10 +193,17 @@ test('AI candidates become ranked, registered, revision-bound cookie outcomes', 
 })
 
 test('candidate evaluator rejects geometry outside the cutter instead of relying on SVG clipping', () => {
-  const design = designSpecFromLegacyOutline(PresetShapes.heart(), { name: 'Heart' })
-  const project = createAIEnhancedCookieProject(design, generation(), { title: 'Heart', physicalScale: 1 })
+  const design = designSpecFromLegacyOutline(PresetShapes.butterfly(), { name: 'Butterfly' })
+  const project = createAIEnhancedCookieProject(design, generation(), {
+    prompt: 'Lavender butterfly with Mia in piped script',
+    title: 'Butterfly',
+    physicalScale: 1,
+  })
   const decoration = structuredClone(project.decorations[0])
-  decoration.strokes[0].points[0] = { x: 10_000, y: 10_000 }
+  decoration.regions[1].outer = decoration.regions[1].outer.map((point) => ({
+    x: point.x + 10_000,
+    y: point.y + 10_000,
+  }))
   const result = evaluateDecorationCandidate({
     design: project.designs[0],
     decoration,
@@ -164,8 +215,12 @@ test('candidate evaluator rejects geometry outside the cutter instead of relying
 })
 
 test('cutter parameter rebasing preserves AI decoration and updates the shared physical scale', () => {
-  const design = designSpecFromLegacyOutline(PresetShapes.star(), { name: 'Star' })
-  const project = createAIEnhancedCookieProject(design, generation(), { title: 'Star', physicalScale: 1 })
+  const design = designSpecFromLegacyOutline(PresetShapes.butterfly(), { name: 'Butterfly' })
+  const project = createAIEnhancedCookieProject(design, generation(), {
+    prompt: 'Lavender butterfly with Mia in piped script',
+    title: 'Butterfly',
+    physicalScale: 1,
+  })
   const rebasedDesign = { ...design, profile: { ...design.profile, revision: 'rebased-test' } }
   const rebased = rebaseCookieProjectDesign(project, rebasedDesign, 1.6)
 

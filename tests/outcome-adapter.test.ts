@@ -26,8 +26,24 @@ test('outcome adapter preserves registration, closed strokes, and coherent refer
   assert.equal(view.palette.name, project.palettes[0].name)
   assert.equal(view.kit.id, project.kits[0].id)
   assert.equal(view.kit.status, 'draft')
+  assert.equal(view.generation?.source, 'prototype')
   assert.ok(view.decoration.strokes.some((stroke) => stroke.closed))
   assert.deepEqual(view.design.outerContour, project.designs[0].designSpec.contours[0].points)
+})
+
+test('AI decoration failure is exposed as a fallback instead of a matched AI result', () => {
+  const design = designSpecFromLegacyOutline(PresetShapes.heart(), { name: 'AI heart outline' })
+  const project = createPrototypeCookieProject(design, {
+    prompt: 'A heart requested through AI',
+    createdAt: CREATED_AT,
+    metadata: {
+      aiDecorationFallback: true,
+      aiDecorationWarning: 'Structured decoration failed validation.',
+    },
+  })
+
+  const view = cookieProjectToOutcomeViewModel(project)
+  assert.equal(view.generation?.source, 'fallback')
 })
 
 test('printable guide is self-contained, escaped, revision-bound, and actual-size', () => {

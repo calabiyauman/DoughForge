@@ -1,4 +1,5 @@
 import type { AIDecorationCandidateDraft, AIDecorationGeneration, AIColorSlot } from '@/lib/ai/decorationPlan'
+import { evaluateDecorationSemantics } from '@/lib/ai/decorationSemantics'
 import type { ClosedContour, DesignSpec, Point2D } from '@/lib/design/types'
 import { evaluateDecorationCandidate, rankDecorationCandidates, type DecorationCandidateEvaluation } from './candidateEvaluation'
 import { nearestTrustedColor } from './colorCatalog'
@@ -322,7 +323,8 @@ function candidateParts(
   candidate: AIDecorationCandidateDraft,
   generation: AIDecorationGeneration,
   candidateIndex: number,
-  physicalScale: number
+  physicalScale: number,
+  requestedDescription: string
 ): CandidateParts {
   const designRevision = base.designs[0]
   const design = designRevision.designSpec
@@ -331,6 +333,7 @@ function candidateParts(
   const outlineBounds = getBounds(outline.points)
   const anchor = findInteriorAnchor(outline.points, holes, outlineBounds)
   const prefix = `${slug(base.id)}:ai:${candidateIndex + 1}:${slug(candidate.id)}`
+  const semanticAssessment = evaluateDecorationSemantics(requestedDescription, candidate)
   const palette = buildPalette(candidate, prefix)
   const colorsBySlot = new Map<AIColorSlot, string>()
   candidate.palette.forEach((color, index) => {
@@ -423,6 +426,25 @@ function candidateParts(
       generationId: generation.generationId,
       candidateId: candidate.id,
       concept: candidate.concept,
+      requestedDescription,
+      semanticSubject: candidate.subject,
+      recognitionStrategy: candidate.recognitionStrategy,
+      semanticFeatures: candidate.semanticFeatures.map((feature) => ({
+        id: feature.id,
+        name: feature.name,
+        description: feature.description,
+        role: feature.role,
+        geometryIds: [...feature.geometryIds],
+      })),
+      semanticScore: semanticAssessment.score,
+      semanticDisposition: semanticAssessment.disposition,
+      semanticFindings: semanticAssessment.findings.map((finding) => ({
+        code: finding.code,
+        severity: finding.severity,
+        message: finding.message,
+        featureIds: [...finding.featureIds],
+      })),
+      coveredSemanticFeatureIds: semanticAssessment.coveredFeatureIds,
       model: generation.model,
       decoratorProfileId: PROFESSIONAL_DECORATOR_PROFILE.id,
     },
@@ -465,9 +487,22 @@ export function createAIEnhancedCookieProject(
   if (!generation.candidates.length) throw new Error('AI decoration generation did not contain candidates')
   const physicalScale = options.physicalScale ?? 1
   const base = createPrototypeCookieProject(design, { ...options, physicalScale })
-  const parts = generation.candidates.map((candidate, index) => candidateParts(base, candidate, generation, index, physicalScale))
+  const requestedDescription = options.prompt ?? design.name
+  const parts = generation.candidates.map((candidate, index) => (
+    candidateParts(base, candidate, generation, index, physicalScale, requestedDescription)
+  ))
   const ranked = rankDecorationCandidates(parts.map((item) => item.evaluation))
   const selectedEvaluation = ranked[0]
+  if (!selectedEvaluation || selectedEvaluation.disposition === 'reject') {
+    const issueCodes = selectedEvaluation?.findings
+      .filter((finding) => finding.severity === 'error')
+      .map((finding) => finding.code)
+      .slice(0, 6)
+      .join(', ')
+    throw new Error(
+      `No AI decoration candidate passed subject-recognition and production checks${issueCodes ? `: ${issueCodes}` : ''}`
+    )
+  }
   const selected = parts.find((item) => item.decoration.id === selectedEvaluation.decorationSpecId) ?? parts[0]
   const ordered = [selected, ...parts.filter((item) => item !== selected)]
   const selectedGelComponents = selected.palette.gelSkus.map((gel) => ({

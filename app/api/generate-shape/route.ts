@@ -6,6 +6,10 @@ import {
   type AIDecorationGeneration
 } from '@/lib/ai/decorationPlan'
 import {
+  evaluateDecorationSemantics,
+  getDecorationSubjectGuidance
+} from '@/lib/ai/decorationSemantics'
+import {
   closeOutline,
   cleanClosedOutline,
   hasOffsetSelfIntersections,
@@ -203,58 +207,91 @@ async function generateDecorationCandidates(
   const generationId = randomUUID()
   const createdAt = new Date().toISOString()
   const outline = normalizedOutlineForDecoration(shape.points)
-  const response = await openai.responses.create({
-    model,
-    store: false,
-    safety_identifier: safetyIdentifier,
-    instructions: [
-      'You are a senior custom sugar-cookie decorator and production design planner.',
-      'Create exactly three distinct royal-icing decoration candidates registered to the supplied normalized exterior outline.',
-      'The normalized design canvas uses x=0..1 left-to-right and y=0..1 bottom-to-top.',
-      'Treat the cutter outline as authoritative. Keep every detail comfortably inside it and preserve recognizable subject anatomy.',
-      'Use 4 to 6 coordinated colors. The base color slot is required. Never invent brands, product SKUs, prices, recipes, or safety claims.',
-      'Use flood regions for large areas, wet-on-wet for small flat marks, and piped-detail for raised line-work.',
-      'Prefer practical custom-cookie techniques: sectioned floods, wet-on-wet accents, rounded monoline details, simplified florals, and registered transfers.',
-      'Use standard deposited line widths near 1.5 to 2 mm. Reserve 0.7 to 1 mm lines for a genuinely detailed candidate.',
-      'Avoid isolated flooded islands narrower than roughly 4 mm, cramped negative spaces, acute cusps, excessive micro-dots, and overlapping same-layer shapes.',
-      'Lettering must use short user-requested copy only. Prefer monoline sans, monoline script, rounded block, or simplified faux calligraphy.',
-      'Keep piped lettering at least 7 mm high when space permits, with open counters and no hairline strokes.',
-      'Use transfers or edible marker lettering when the requested copy is too dense for direct piping.',
-      'For a character or icon, prioritize the two to five internal features that make it unmistakable.',
-      'Candidate one should be commercially clean and approachable, candidate two more detailed, and candidate three a stylistic alternative.',
-      'Return geometry and design intent only. DoughForge will build steps, color recipes, scoring, and commerce data deterministically.'
-    ].join(' '),
-    input: [
-      `Customer request: ${description}`,
-      `Validated cutter category: ${shape.category}`,
-      `Normalized exterior outline (${outline.length} points): ${JSON.stringify(outline)}`,
-      'All candidate point coordinates and centers must lie between 0.04 and 0.96.'
-    ].join('\n'),
-    max_output_tokens: 8_000,
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'cookie_decoration_candidates',
-        strict: true,
-        schema: AI_DECORATION_RESULT_SCHEMA
-      }
-    }
-  })
-  if (!response.output_text) throw new Error('OpenAI returned no structured decoration output')
-  const result = validateAIDecorationModelResult(JSON.parse(response.output_text))
-  return {
-    generationId,
-    model,
-    createdAt,
-    candidates: result.candidates,
-    usage: response.usage
-      ? {
-          inputTokens: response.usage.input_tokens,
-          outputTokens: response.usage.output_tokens,
-          totalTokens: response.usage.total_tokens
+  const subjectGuidance = getDecorationSubjectGuidance(description)
+  let repairFeedback = ''
+  let lastError: unknown
+  let inputTokens = 0
+  let outputTokens = 0
+  let totalTokens = 0
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await openai.responses.create({
+        model,
+        store: false,
+        safety_identifier: safetyIdentifier,
+        instructions: [
+          'You are a senior custom sugar-cookie decorator and production design planner.',
+          'Create exactly three distinct royal-icing decoration candidates registered to the supplied normalized exterior outline.',
+          'The normalized design canvas uses x=0..1 left-to-right and y=0..1 bottom-to-top.',
+          'The icing alone must identify the customer request. Do not rely on the cutter edge to provide the subject meaning.',
+          'Treat the cutter outline as authoritative. Keep every detail comfortably inside it and preserve recognizable subject anatomy.',
+          'For every visible region, stroke, or lettering item, create a semanticFeatures binding that names what it depicts.',
+          'Set candidate.subject to the concise literal subject noun from the customer request; do not use a color, style, event, or generic cookie label as the subject.',
+          'Each candidate needs at least two signature landmarks, at least three distinct bound geometries, and one restrained playful accent.',
+          'Never substitute a generic inset border, medallion, large unrelated circle, badge, or abstract chevron for subject landmarks.',
+          'Use 4 to 6 coordinated colors. The base color slot is required. Never invent brands, product SKUs, prices, recipes, or safety claims.',
+          'Use flood regions for large areas, wet-on-wet for small flat marks, and piped-detail for raised line-work.',
+          'Prefer practical custom-cookie techniques: sectioned floods, wet-on-wet accents, rounded monoline details, simplified florals, and registered transfers.',
+          'Use standard deposited line widths near 1.5 to 2 mm. Reserve 0.7 to 1 mm lines for a genuinely detailed candidate.',
+          'Avoid isolated flooded islands narrower than roughly 4 mm, cramped negative spaces, acute cusps, excessive micro-dots, and overlapping same-layer shapes.',
+          'Lettering must use short user-requested copy only. Prefer monoline sans, monoline script, rounded block, or simplified faux calligraphy.',
+          'Keep piped lettering at least 7 mm high when space permits, with open counters and no hairline strokes.',
+          'Use transfers or edible marker lettering when the requested copy is too dense for direct piping.',
+          'Every region must include at least three valid points. For an ellipse, supply three harmless in-bounds placeholder points; its center and radii remain authoritative.',
+          'Candidate one should be commercially clean and classic, candidate two cute and playful, and candidate three a polished storybook alternative.',
+          'Return geometry and design intent only. DoughForge will build steps, color recipes, scoring, and commerce data deterministically.'
+        ].join(' '),
+        input: [
+          `Customer request: ${description}`,
+          `Validated cutter category: ${shape.category}`,
+          `Subject-specific art direction: ${subjectGuidance}`,
+          `Normalized exterior outline (${outline.length} points): ${JSON.stringify(outline)}`,
+          'All candidate point coordinates and centers must lie between 0.04 and 0.96.',
+          repairFeedback
+        ].filter(Boolean).join('\n'),
+        max_output_tokens: 10_000,
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'cookie_decoration_candidates',
+            strict: true,
+            schema: AI_DECORATION_RESULT_SCHEMA
+          }
         }
-      : undefined
+      })
+      if (response.usage) {
+        inputTokens += response.usage.input_tokens
+        outputTokens += response.usage.output_tokens
+        totalTokens += response.usage.total_tokens
+      }
+      if (!response.output_text) throw new Error('OpenAI returned no structured decoration output')
+      const result = validateAIDecorationModelResult(JSON.parse(response.output_text))
+      const assessments = result.candidates.map((candidate) => evaluateDecorationSemantics(description, candidate))
+      if (assessments.every((assessment) => assessment.disposition === 'reject')) {
+        const issueCodes = [...new Set(assessments.flatMap((assessment) => (
+          assessment.findings.filter((finding) => finding.severity === 'error').map((finding) => finding.code)
+        )))].slice(0, 8)
+        throw new Error(`All decoration candidates failed subject recognition: ${issueCodes.join(', ')}`)
+      }
+      return {
+        generationId,
+        model,
+        createdAt,
+        candidates: result.candidates,
+        usage: totalTokens ? { inputTokens, outputTokens, totalTokens } : undefined
+      }
+    } catch (error) {
+      lastError = error
+      const message = error instanceof Error ? error.message : 'unknown structured-output error'
+      repairFeedback = [
+        'The previous decoration response was rejected.',
+        `Repair every candidate and return a completely new valid response. Validation feedback: ${message.slice(0, 600)}`,
+      ].join(' ')
+    }
   }
+
+  throw lastError ?? new Error('OpenAI returned no usable decoration candidates')
 }
 
 export async function POST(request: Request) {

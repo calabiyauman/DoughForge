@@ -182,7 +182,11 @@ export function cookieProjectToOutcomeViewModel(
       }))
     },
     generation: {
-      source: project.metadata?.generatedByAI === true ? 'ai' : 'prototype',
+      source: project.metadata?.generatedByAI === true
+        ? 'ai'
+        : project.metadata?.aiDecorationFallback === true
+          ? 'fallback'
+          : 'prototype',
       ...(typeof generationModel === 'string' ? { model: generationModel } : {}),
       ...(Number.isFinite(generationScore) ? { score: generationScore } : {}),
       ...(disposition === 'eligible' || disposition === 'repair' || disposition === 'reject'

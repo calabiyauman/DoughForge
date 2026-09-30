@@ -1,4 +1,4 @@
-import type { ClosedContour, DesignSpec, Point2D } from '../design/types'
+import type { ClosedContour, DesignSpec, JsonObject, Point2D } from '../design/types'
 import { sealCookieProjectRevision } from './hash'
 import { assertValidCookieProjectRevision } from './validation'
 import {
@@ -40,6 +40,7 @@ export interface PrototypeProjectOptions {
   projectId?: string
   revisionNumber?: number
   physicalScale?: number
+  metadata?: JsonObject
 }
 
 type Bounds = {
@@ -538,7 +539,8 @@ export function createPrototypeCookieProject(
       prototype: true,
       sharedCoordinateFrame: 'design-canvas',
       physicalScale,
-      checkoutLocked: true
+      checkoutLocked: true,
+      ...(options.metadata ?? {})
     }
   })
   assertValidCookieProjectRevision(project)

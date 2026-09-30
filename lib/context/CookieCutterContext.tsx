@@ -13,6 +13,7 @@ import {
 import {
   designSpecFromLegacyOutline,
   type DesignSpec,
+  type JsonObject,
   type LegacySingleOutline
 } from '@/lib/design'
 import {
@@ -94,7 +95,8 @@ function generateFromDesign(
 function projectFromDesign(
   design: DesignSpec,
   previous: CookieProjectRevision | null | undefined,
-  physicalScale: number
+  physicalScale: number,
+  metadata?: JsonObject
 ): CookieProjectRevision {
   if (previous) {
     const rebased = rebaseCookieProjectDesign(previous, design, physicalScale)
@@ -110,7 +112,8 @@ function projectFromDesign(
     createdAt: previous?.createdAt,
     projectId: previous?.projectId,
     revisionNumber: previous?.revisionNumber,
-    physicalScale
+    physicalScale,
+    metadata
   })
 }
 
@@ -259,22 +262,49 @@ export function CookieCutterProvider({ children }: { children: ReactNode }) {
       setState((previous) => {
         try {
           const generated = generateFromDesign(design, previous.parameters)
-          const outcomeProject = outline.metadata.decorationGeneration
-            ? createAIEnhancedCookieProject(generated.design, outline.metadata.decorationGeneration, {
-                prompt: outline.description,
-                title: name || outline.description,
-                physicalScale: previous.parameters.scale
+          let decorationWarning = outline.metadata.decorationWarning
+          let usedDecorationFallback = !outline.metadata.decorationGeneration
+          let outcomeProject: CookieProjectRevision
+          if (outline.metadata.decorationGeneration) {
+            try {
+              outcomeProject = createAIEnhancedCookieProject(
+                generated.design,
+                outline.metadata.decorationGeneration,
+                {
+                  prompt: outline.description,
+                  title: name || outline.description,
+                  physicalScale: previous.parameters.scale
+                }
+              )
+            } catch (error) {
+              console.warn('AI decoration candidates were rejected; using a labeled placeholder', error)
+              usedDecorationFallback = true
+              decorationWarning = 'AI decoration candidates did not pass subject-recognition and production checks. Please retry.'
+              outcomeProject = projectFromDesign(generated.design, null, previous.parameters.scale, {
+                aiDecorationFallback: true,
+                aiDecorationWarning: decorationWarning,
               })
-            : projectFromDesign(generated.design, null, previous.parameters.scale)
+            }
+          } else {
+            decorationWarning = decorationWarning
+              ?? 'Structured AI decoration was unavailable for this generation.'
+            outcomeProject = projectFromDesign(generated.design, null, previous.parameters.scale, {
+              aiDecorationFallback: true,
+              aiDecorationWarning: decorationWarning,
+            })
+          }
           const score = outcomeProject.metadata?.selectedCandidateScore
           const scoreSuffix = typeof score === 'number' ? ` — selected decoration score ${score}/100` : ''
-          const warningSuffix = outline.metadata.decorationWarning ? ` — ${outline.metadata.decorationWarning}` : ''
+          const warningSuffix = decorationWarning ? ` — ${decorationWarning}` : ''
+          const resolvedStatus = usedDecorationFallback
+            ? `Generated printable cutter, but the AI decoration plan needs a retry: "${name || outline.description}"`
+            : successStatus ?? `Generated AI cookie project: ${design.name}`
           return {
             ...previous,
             ...generated,
             outcomeProject,
             status: generationStatus(
-              `${successStatus ?? `Generated AI cookie project: ${design.name}`}${scoreSuffix}${warningSuffix}`,
+              `${resolvedStatus}${scoreSuffix}${warningSuffix}`,
               generated.cookieCutter
             )
           }

@@ -4,6 +4,7 @@ import { PROFESSIONAL_DECORATOR_PROFILE } from './decoratorProfile'
 import type { CookieDesignRevision, DecorationSpec, PaletteSpec } from './types'
 
 export type EvaluationMetricId =
+  | 'semantic-fidelity'
   | 'geometry-containment'
   | 'stroke-width'
   | 'region-overlap'
@@ -56,13 +57,14 @@ export interface CandidateEvaluationInput {
 }
 
 const WEIGHTS: Record<EvaluationMetricId, number> = {
-  'geometry-containment': 25,
-  'stroke-width': 15,
-  'region-overlap': 12,
-  'feature-legibility': 18,
-  'palette-contrast': 10,
-  'step-complexity': 8,
-  reproducibility: 12,
+  'semantic-fidelity': 30,
+  'geometry-containment': 18,
+  'stroke-width': 10,
+  'region-overlap': 8,
+  'feature-legibility': 10,
+  'palette-contrast': 7,
+  'step-complexity': 7,
+  reproducibility: 10,
 }
 
 function round(value: number, places = 3): number {
@@ -165,6 +167,67 @@ function contrast(first: string, second: string): number {
   const a = relativeLuminance(first)
   const b = relativeLuminance(second)
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+}
+
+function semanticFidelity(input: CandidateEvaluationInput): CandidateMetricResult {
+  const id: EvaluationMetricId = 'semantic-fidelity'
+  const score = Number(input.decoration.metadata?.semanticScore)
+  const disposition = input.decoration.metadata?.semanticDisposition
+  const rawFindings = input.decoration.metadata?.semanticFindings
+  const findings: CandidateFinding[] = []
+
+  if (!Number.isFinite(score) || !['eligible', 'repair', 'reject'].includes(String(disposition))) {
+    findings.push(finding(
+      id,
+      'missing_semantic_assessment',
+      'error',
+      'metadata.semanticFeatures',
+      'AI decoration candidates must be evaluated against the requested subject before ranking'
+    ))
+    return metric(id, 0, findings, { semanticScore: 0, semanticDisposition: 'reject' }, true)
+  }
+
+  if (Array.isArray(rawFindings)) {
+    rawFindings.forEach((rawFinding, index) => {
+      if (!rawFinding || typeof rawFinding !== 'object' || Array.isArray(rawFinding)) return
+      const candidate = rawFinding as Record<string, unknown>
+      const severity = candidate.severity === 'error' ? 'error' : 'warning'
+      const featureIds = Array.isArray(candidate.featureIds)
+        ? candidate.featureIds.filter((item): item is string => typeof item === 'string')
+        : []
+      findings.push(finding(
+        id,
+        typeof candidate.code === 'string' ? candidate.code : 'semantic_finding',
+        severity,
+        `metadata.semanticFindings[${index}]`,
+        typeof candidate.message === 'string' ? candidate.message : 'Subject-recognition issue',
+        featureIds
+      ))
+    })
+  }
+
+  if (disposition === 'reject' && !findings.some((item) => item.severity === 'error')) {
+    findings.push(finding(
+      id,
+      'semantic_candidate_rejected',
+      'error',
+      'metadata.semanticDisposition',
+      'The decoration does not contain enough verified subject landmarks'
+    ))
+  }
+  return metric(
+    id,
+    score,
+    findings,
+    {
+      semanticScore: score,
+      semanticDisposition: String(disposition),
+      coveredFeatureCount: Array.isArray(input.decoration.metadata?.coveredSemanticFeatureIds)
+        ? input.decoration.metadata.coveredSemanticFeatureIds.length
+        : 0,
+    },
+    disposition === 'reject' || findings.some((item) => item.severity === 'error')
+  )
 }
 
 function geometryContainment(input: CandidateEvaluationInput, outer: Point2D[], holes: Point2D[][]): CandidateMetricResult {
@@ -372,6 +435,7 @@ export function evaluateDecorationCandidate(input: CandidateEvaluationInput): De
     .filter((contour) => contour.relationship.kind === 'hole' && contour.relationship.outerContourId === cutOuter.id)
     .map((contour) => contour.points.map((point) => ({ x: point.x * scale, y: point.y * scale })))
   const metrics = [
+    semanticFidelity(input),
     geometryContainment(input, outer, holes),
     strokeWidth(input),
     regionOverlap(input),

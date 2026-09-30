@@ -165,6 +165,10 @@ export default function CookieOutcomePanel({
               <span className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">
                 AI ranked{typeof outcome.generation.score === 'number' ? ` ${outcome.generation.score}/100` : ''}
               </span>
+            ) : outcome.generation?.source === 'fallback' ? (
+              <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
+                Decoration placeholder
+              </span>
             ) : null}
             <span
               className={clsx(
@@ -233,7 +237,9 @@ export default function CookieOutcomePanel({
                   ? 'Numbers sit directly on the generated icing regions.'
                   : outcome.generation?.source === 'ai'
                     ? `Selected from ${outcome.generation.candidateCount ?? 1} structured AI decoration candidate${(outcome.generation.candidateCount ?? 1) === 1 ? '' : 's'}.`
-                    : 'Rendered from the cutter contour and registered decoration geometry.'}
+                    : outcome.generation?.source === 'fallback'
+                      ? 'The cutter is printable, but this generic icing sketch is only a placeholder.'
+                      : 'Rendered from the cutter contour and registered decoration geometry.'}
               </p>
             </div>
             {onEditDesign ? (
@@ -297,10 +303,14 @@ export default function CookieOutcomePanel({
                 What you will make
               </p>
               <h3 className="mt-2 text-xl font-semibold tracking-tight text-stone-950">
-                A matched result, not just a cutter
+                {outcome.generation?.source === 'fallback'
+                  ? 'Decoration placeholder — retry AI'
+                  : 'A matched result, not just a cutter'}
               </h3>
               <p className="mt-2 text-sm leading-6 text-stone-600">
-                The cutter, icing map, color recipes, and guide all share this exact registered design.
+                {outcome.generation?.source === 'fallback'
+                  ? 'This fallback keeps the cutter usable, but its generic icing map is not a subject-accurate decorating plan.'
+                  : 'The cutter, icing map, color recipes, and guide all share this exact registered design.'}
               </p>
 
               <dl className="mt-6 divide-y divide-stone-100 rounded-2xl border border-stone-200 bg-stone-50/60 px-4">
@@ -337,7 +347,7 @@ export default function CookieOutcomePanel({
                 onClick={() => selectView('guide')}
                 className="mt-6 flex min-h-12 w-full items-center justify-between rounded-2xl border border-violet-200 bg-violet-50 px-4 text-left text-sm font-semibold text-violet-800 transition hover:bg-violet-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2"
               >
-                See how to decorate it
+                {outcome.generation?.source === 'fallback' ? 'Review placeholder steps' : 'See how to decorate it'}
                 <ChevronRight className="h-4 w-4" aria-hidden="true" />
               </button>
             </div>

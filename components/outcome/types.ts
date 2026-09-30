@@ -146,7 +146,7 @@ export interface CookieOutcomeViewModel {
     steps: OutcomeDecorationStep[]
   }
   generation?: {
-    source: 'ai' | 'prototype'
+    source: 'ai' | 'prototype' | 'fallback'
     model?: string
     score?: number
     disposition?: 'eligible' | 'repair' | 'reject'

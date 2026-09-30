@@ -101,11 +101,14 @@ export default function OutlineTab() {
 
       if (outline) {
         const source = outline.metadata?.source
+        const hasStructuredDecoration = Boolean(outline.metadata?.decorationGeneration)
         loadGeneratedOutline(
           outline,
           aiDescription.trim(),
-          source === 'openai-server'
+          source === 'openai-server' && hasStructuredDecoration
             ? `Generated and ranked high-fidelity cookie project: "${aiDescription.trim()}"`
+            : source === 'openai-server'
+              ? `Generated printable cutter, but the AI decoration plan needs a retry: "${aiDescription.trim()}"`
             : `Generated printable project fallback for: "${aiDescription.trim()}"`
         )
       } else {

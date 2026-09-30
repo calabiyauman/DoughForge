@@ -6,6 +6,9 @@ export type AIColorSlot = typeof AI_COLOR_SLOTS[number]
 export const AI_DECORATION_TECHNIQUES = ['flood', 'wet-on-wet', 'piped-detail'] as const
 export type AIDecorationTechnique = typeof AI_DECORATION_TECHNIQUES[number]
 
+export const AI_SEMANTIC_ROLES = ['signature', 'supporting', 'accent'] as const
+export type AISemanticRole = typeof AI_SEMANTIC_ROLES[number]
+
 export interface AINormalizedPoint {
   x: number
   y: number
@@ -58,10 +61,20 @@ export interface AIDecorationLetteringDraft {
   layer: number
 }
 
+export interface AISemanticFeatureBinding {
+  id: string
+  name: string
+  description: string
+  role: AISemanticRole
+  geometryIds: string[]
+}
+
 export interface AIDecorationCandidateDraft {
   id: string
   name: string
   concept: string
+  subject: string
+  recognitionStrategy: string
   difficulty: 'easy' | 'detailed'
   estimatedMinutes: number
   paletteName: string
@@ -69,6 +82,7 @@ export interface AIDecorationCandidateDraft {
   regions: AIDecorationRegionDraft[]
   strokes: AIDecorationStrokeDraft[]
   lettering: AIDecorationLetteringDraft[]
+  semanticFeatures: AISemanticFeatureBinding[]
 }
 
 export interface AIDecorationModelResult {
@@ -147,7 +161,7 @@ export const AI_DECORATION_RESULT_SCHEMA = {
                 centerY: { type: 'number', minimum: 0.04, maximum: 0.96 },
                 radiusX: { type: 'number', minimum: 0, maximum: 0.4 },
                 radiusY: { type: 'number', minimum: 0, maximum: 0.4 },
-                points: { type: 'array', minItems: 0, maxItems: 20, items: pointSchema },
+                points: { type: 'array', minItems: 3, maxItems: 20, items: pointSchema },
                 colorSlot: colorSlotSchema,
                 technique: { type: 'string', enum: AI_DECORATION_TECHNIQUES },
                 layer: { type: 'integer', minimum: 0, maximum: 5 },
@@ -210,10 +224,35 @@ export const AI_DECORATION_RESULT_SCHEMA = {
               ],
             },
           },
+          subject: { type: 'string', minLength: 1, maxLength: 80 },
+          recognitionStrategy: { type: 'string', minLength: 1, maxLength: 320 },
+          semanticFeatures: {
+            type: 'array',
+            minItems: 3,
+            maxItems: 8,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string', minLength: 1, maxLength: 40 },
+                name: { type: 'string', minLength: 1, maxLength: 80 },
+                description: { type: 'string', minLength: 1, maxLength: 180 },
+                role: { type: 'string', enum: AI_SEMANTIC_ROLES },
+                geometryIds: {
+                  type: 'array',
+                  minItems: 1,
+                  maxItems: 6,
+                  items: { type: 'string', minLength: 1, maxLength: 40 },
+                },
+              },
+              required: ['id', 'name', 'description', 'role', 'geometryIds'],
+            },
+          },
         },
         required: [
-          'id', 'name', 'concept', 'difficulty', 'estimatedMinutes', 'paletteName',
-          'palette', 'regions', 'strokes', 'lettering',
+          'id', 'name', 'concept', 'subject', 'recognitionStrategy', 'difficulty',
+          'estimatedMinutes', 'paletteName', 'palette', 'regions', 'strokes',
+          'lettering', 'semanticFeatures',
         ],
       },
     },
@@ -296,9 +335,8 @@ export function validateAIDecorationModelResult(value: unknown): AIDecorationMod
       const regionPath = `${path}.regions[${regionIndex}]`
       if (!isRecord(rawRegion)) throw new Error(`${regionPath} must be an object`)
       const kind = assertEnum(rawRegion.kind, ['ellipse', 'polygon'] as const, `${regionPath}.kind`)
-      const points = assertArray(rawRegion.points, `${regionPath}.points`, 0, 20)
+      const points = assertArray(rawRegion.points, `${regionPath}.points`, 3, 20)
         .map((point, pointIndex) => parsePoint(point, `${regionPath}.points[${pointIndex}]`))
-      if (kind === 'polygon' && points.length < 3) throw new Error(`${regionPath}.points requires at least three points`)
       return {
         id: assertString(rawRegion.id, `${regionPath}.id`, 40),
         name: assertString(rawRegion.name, `${regionPath}.name`, 80),
@@ -357,11 +395,46 @@ export function validateAIDecorationModelResult(value: unknown): AIDecorationMod
     uniqueIds(regions, `${path}.regions`)
     uniqueIds(strokes, `${path}.strokes`)
     uniqueIds(lettering, `${path}.lettering`)
+    const geometry = [...regions, ...strokes, ...lettering]
+    uniqueIds(geometry, `${path}.geometry`)
+    const geometryIds = new Set(geometry.map((item) => item.id))
+    const semanticFeatures = assertArray(rawCandidate.semanticFeatures, `${path}.semanticFeatures`, 3, 8)
+      .map((rawFeature, featureIndex) => {
+        const featurePath = `${path}.semanticFeatures[${featureIndex}]`
+        if (!isRecord(rawFeature)) throw new Error(`${featurePath} must be an object`)
+        const boundIds = assertArray(rawFeature.geometryIds, `${featurePath}.geometryIds`, 1, 6)
+          .map((id, idIndex) => assertString(id, `${featurePath}.geometryIds[${idIndex}]`, 40))
+        const unknownIds = boundIds.filter((id) => !geometryIds.has(id))
+        if (unknownIds.length) {
+          throw new Error(`${featurePath}.geometryIds references unknown geometry: ${unknownIds.join(', ')}`)
+        }
+        return {
+          id: assertString(rawFeature.id, `${featurePath}.id`, 40),
+          name: assertString(rawFeature.name, `${featurePath}.name`, 80),
+          description: assertString(rawFeature.description, `${featurePath}.description`, 180),
+          role: assertEnum(rawFeature.role, AI_SEMANTIC_ROLES, `${featurePath}.role`),
+          geometryIds: [...new Set(boundIds)],
+        }
+      })
+    uniqueIds(semanticFeatures, `${path}.semanticFeatures`)
+    if (semanticFeatures.filter((feature) => feature.role === 'signature').length < 2) {
+      throw new Error(`${path}.semanticFeatures requires at least two signature features`)
+    }
+    const boundGeometryIds = new Set(semanticFeatures.flatMap((feature) => feature.geometryIds))
+    if (boundGeometryIds.size < 3) {
+      throw new Error(`${path}.semanticFeatures must bind at least three distinct decoration geometries`)
+    }
+    const unboundGeometryIds = [...geometryIds].filter((id) => !boundGeometryIds.has(id))
+    if (unboundGeometryIds.length) {
+      throw new Error(`${path}.semanticFeatures leaves geometry unbound: ${unboundGeometryIds.join(', ')}`)
+    }
 
     return {
       id: assertString(rawCandidate.id, `${path}.id`, 40),
       name: assertString(rawCandidate.name, `${path}.name`, 80),
       concept: assertString(rawCandidate.concept, `${path}.concept`, 240),
+      subject: assertString(rawCandidate.subject, `${path}.subject`, 80),
+      recognitionStrategy: assertString(rawCandidate.recognitionStrategy, `${path}.recognitionStrategy`, 320),
       difficulty: assertEnum(rawCandidate.difficulty, ['easy', 'detailed'] as const, `${path}.difficulty`),
       estimatedMinutes: assertInteger(rawCandidate.estimatedMinutes, `${path}.estimatedMinutes`, 15, 240),
       paletteName: assertString(rawCandidate.paletteName, `${path}.paletteName`, 80),
@@ -369,6 +442,7 @@ export function validateAIDecorationModelResult(value: unknown): AIDecorationMod
       regions,
       strokes,
       lettering,
+      semanticFeatures,
     }
   })
   uniqueIds(candidates, 'candidates')
