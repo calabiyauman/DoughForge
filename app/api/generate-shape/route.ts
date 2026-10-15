@@ -28,7 +28,7 @@ import {
 import { tracePngSilhouette } from '@/lib/geometry/pngSilhouette'
 
 export const runtime = 'nodejs'
-export const maxDuration = 120
+export const maxDuration = 180
 
 const categories = [
   'animal',
@@ -56,8 +56,8 @@ const RATE_LIMIT_MAX_REQUESTS = 10
 const MAX_BODY_BYTES = 2_048
 const MAX_DESCRIPTION_LENGTH = 200
 const MAX_GENERATION_ATTEMPTS = 2
-const OPENAI_CALL_TIMEOUT_MS = 25_000
-const OPENAI_ROUTE_DEADLINE_MS = 105_000
+const OPENAI_CALL_TIMEOUT_MS = 45_000
+const OPENAI_ROUTE_DEADLINE_MS = 165_000
 const PROFESSIONAL_PROFILE_OFFSETS_MM = [6.35, -2.79] as const
 
 const globalForRateLimit = globalThis as typeof globalThis & {
