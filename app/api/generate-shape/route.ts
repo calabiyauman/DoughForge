@@ -249,6 +249,7 @@ async function generateRecognitionPlan(
           'Use supporting or accent landmarks only when they strengthen the requested identity; do not invent unrelated motifs.',
           'The normalized canvas uses x=0..1 left-to-right and y=0..1 bottom-to-top.',
           'Give every landmark a truthful concrete zone, visible span, primitive kind, minimum instance count, maximum instance count, and distribution.',
+          'Signature landmarks must have a visible minimum span of at least 0.08. Required supporting details such as a shutter button may be smaller but must still have a visible span of at least 0.03.',
           'For an exact requested count, set minimumInstances and maximumInstances to that same count. A single item must be 1 and 1; a pair must be 2 and 2.',
           'Use horizontal-pair for exactly two side-by-side left/right features, including double doors, paired eyes, wheels, and windows. Use vertical-pair only for two explicitly stacked top/bottom features. State side-by-side or stacked direction plainly in the landmark name or description. Use horizontal-row or vertical-stack for repeated subjects in a line, cluster for a grouped set, and radial only for three or more elements surrounding a center.',
           'Use requiredText only for exact visible words requested by the customer; otherwise return an empty string.',

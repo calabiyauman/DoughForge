@@ -431,6 +431,17 @@ test('required and signature landmarks must have concrete subject-specific const
     /concrete placement/
   )
 
+  const smallSupportingDetail = structuredClone(cameraPlan())
+  const shutter = smallSupportingDetail.landmarks.find((landmark) => landmark.id === 'top-controls')!
+  shutter.minimumWidthRatio = 0.04
+  shutter.minimumHeightRatio = 0
+  assert.doesNotThrow(() => validateAIRecognitionPlan(smallSupportingDetail, 'cute camera cookie'))
+  shutter.minimumWidthRatio = 0.01
+  assert.throws(
+    () => validateAIRecognitionPlan(smallSupportingDetail, 'cute camera cookie'),
+    /concrete placement/
+  )
+
   const generic = structuredClone(cameraPlan())
   generic.subject = 'red circle'
   generic.visualThesis = 'A red circle centered on the cookie.'

@@ -460,7 +460,8 @@ export function validateAIRecognitionPlan(
       || landmark.zone === 'any'
       || landmark.geometryKind === 'either'
       || landmark.distribution === 'free'
-      || Math.max(landmark.minimumWidthRatio, landmark.minimumHeightRatio) < 0.08
+      || Math.max(landmark.minimumWidthRatio, landmark.minimumHeightRatio)
+        < (landmark.role === 'signature' ? 0.08 : 0.03)
     )
   ))
   if (invalidIdentityLandmarks.length) {
