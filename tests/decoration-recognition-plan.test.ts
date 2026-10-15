@@ -344,6 +344,36 @@ test('generic or wrong-layout geometry cannot self-certify with convincing label
   assert.ok(assessment.findings.some((finding) => finding.code === 'landmark_relationship_mismatch'))
 })
 
+test('moderate planned-span misses remain repairable while grossly tiny signatures reject', () => {
+  const plan = cameraPlan()
+  plan.landmarks.find((landmark) => landmark.id === 'camera-body')!.minimumWidthRatio = 0.8
+  const moderate = cameraCandidate('camera-moderate-scale')
+  const moderateBody = moderate.regions.find((region) => region.landmarkId === 'camera-body')!
+  moderateBody.points = [
+    { x: 0.19, y: 0.18 },
+    { x: 0.81, y: 0.18 },
+    { x: 0.81, y: 0.75 },
+    { x: 0.19, y: 0.75 },
+  ]
+  const moderateAssessment = evaluateDecorationSemantics('cute camera cookie', moderate, plan)
+  const moderateScale = moderateAssessment.findings.find((finding) => finding.code === 'landmark_scale_mismatch')
+  assert.equal(moderateAssessment.disposition, 'repair')
+  assert.equal(moderateScale?.severity, 'warning')
+
+  const tiny = cameraCandidate('camera-tiny-scale')
+  const tinyBody = tiny.regions.find((region) => region.landmarkId === 'camera-body')!
+  tinyBody.points = [
+    { x: 0.3, y: 0.18 },
+    { x: 0.7, y: 0.18 },
+    { x: 0.7, y: 0.75 },
+    { x: 0.3, y: 0.75 },
+  ]
+  const tinyAssessment = evaluateDecorationSemantics('cute camera cookie', tiny, plan)
+  const tinyScale = tinyAssessment.findings.find((finding) => finding.code === 'landmark_scale_mismatch')
+  assert.equal(tinyAssessment.disposition, 'reject')
+  assert.equal(tinyScale?.severity, 'error')
+})
+
 test('dynamic candidate schema requires direct bindings to frozen landmark ids', () => {
   const schemaText = JSON.stringify(createAIDecorationResultSchema(cameraPlan()))
   assert.match(schemaText, /landmarkId/)

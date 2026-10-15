@@ -730,16 +730,16 @@ function relationMatches(
     case 'left-of': return anyInstancePair((first, second) => first.centerX <= second.centerX - 0.06)
     case 'right-of': return anyInstancePair((first, second) => first.centerX >= second.centerX + 0.06)
     case 'inside': return (
-      from.minX >= to.minX - 0.03
-      && from.maxX <= to.maxX + 0.03
-      && from.minY >= to.minY - 0.03
-      && from.maxY <= to.maxY + 0.03
+      from.minX >= to.minX - 0.06
+      && from.maxX <= to.maxX + 0.06
+      && from.minY >= to.minY - 0.06
+      && from.maxY <= to.maxY + 0.06
     )
     case 'surrounds': return (
-      to.minX >= from.minX - 0.03
-      && to.maxX <= from.maxX + 0.03
-      && to.minY >= from.minY - 0.03
-      && to.maxY <= from.maxY + 0.03
+      to.minX >= from.minX - 0.06
+      && to.maxX <= from.maxX + 0.06
+      && to.minY >= from.minY - 0.06
+      && to.maxY <= from.maxY + 0.06
     )
     case 'overlaps': return boxesOverlap(from, to)
     case 'centered-with': return Math.abs(from.centerX - to.centerX) <= 0.1
@@ -851,9 +851,16 @@ function recognitionPlanFindings(
       || primitiveBounds.width + 0.04 < landmark.minimumWidthRatio
       || primitiveBounds.height + 0.04 < landmark.minimumHeightRatio
     ) {
+      const widthScale = primitiveBounds && landmark.minimumWidthRatio > 0
+        ? primitiveBounds.width / landmark.minimumWidthRatio
+        : 1
+      const heightScale = primitiveBounds && landmark.minimumHeightRatio > 0
+        ? primitiveBounds.height / landmark.minimumHeightRatio
+        : 1
+      const scaleSeverity = Math.min(widthScale, heightScale) < 0.6 ? severity : 'warning'
       findings.push({
         code: 'landmark_scale_mismatch',
-        severity,
+        severity: scaleSeverity,
         message: `${landmark.name} is too small to carry its planned recognition role.`,
         featureIds: [landmark.id],
       })

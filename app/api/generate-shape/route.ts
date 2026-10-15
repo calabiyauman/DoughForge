@@ -478,6 +478,10 @@ async function generateDecorationCandidates(
             .filter((finding) => finding.severity === 'error')
             .map((finding) => `${finding.code}: ${finding.message}`)
         )).slice(0, 8)
+        console.warn(
+          'Frozen recognition plan rejected all decoration candidates',
+          JSON.stringify(assessments)
+        )
         throw new Error(`All decoration candidates failed the frozen recognition plan: ${issues.join(' | ')}`)
       }
       const visualResult = await evaluateDecorationCandidatesVisually(
