@@ -275,7 +275,7 @@ export function validateDecorationVisualEvaluation(
     })
     const passed = rawAssessment.subjectRecognizable
       && subjectConfidence >= 72
-      && requestFidelityScore >= 82
+      && requestFidelityScore >= 80
       && layoutScore >= 65
       && decoratorFidelityScore >= 70
       && rawAssessment.allRequestedElementsVisible

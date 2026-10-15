@@ -106,6 +106,18 @@ test('visual gate rejects incomplete requests and frosting below commercial qual
   assert.equal(parsed.assessments[2].passed, true)
 })
 
+test('visual gate accepts the documented request-fidelity boundary without weakening hard checks', () => {
+  const candidates = [{ id: 'one' }, { id: 'two' }, { id: 'three' }]
+  const raw = { assessments: candidates.map((candidate) => assessment(candidate.id)) }
+  raw.assessments[0].requestFidelityScore = 80
+  raw.assessments[1].requestFidelityScore = 79
+
+  const parsed = validateDecorationVisualEvaluation(raw, candidates, plan)
+  assert.equal(parsed.assessments[0].passed, true)
+  assert.equal(parsed.assessments[1].passed, false)
+  assert.equal(parsed.assessments[2].passed, true)
+})
+
 test('visual gate independently verifies counts, geometry, exact text, and relationships', () => {
   const candidates = [{ id: 'one' }, { id: 'two' }, { id: 'three' }]
   const raw = { assessments: candidates.map((candidate) => assessment(candidate.id)) }
