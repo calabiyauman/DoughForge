@@ -1,4 +1,12 @@
 import type { DecoratorFontStyle } from '@/lib/project/decoratorProfile'
+import {
+  validateAIRecognitionPlan,
+  type AIDecorationRecognitionPlan,
+} from './decorationRecognition'
+import {
+  validateDecorationVisualEvaluation,
+  type AIDecorationVisualEvaluation,
+} from './decorationVisualEvaluation'
 
 export const AI_COLOR_SLOTS = ['base', 'outline', 'accent', 'detail', 'neutral'] as const
 export type AIColorSlot = typeof AI_COLOR_SLOTS[number]
@@ -32,6 +40,7 @@ export interface AIDecorationRegionDraft {
   colorSlot: AIColorSlot
   technique: AIDecorationTechnique
   layer: number
+  landmarkId?: string
 }
 
 export interface AIDecorationStrokeDraft {
@@ -43,6 +52,7 @@ export interface AIDecorationStrokeDraft {
   closed: boolean
   technique: 'wet-on-wet' | 'piped-detail'
   layer: number
+  landmarkId?: string
 }
 
 export interface AIDecorationLetteringDraft {
@@ -59,6 +69,7 @@ export interface AIDecorationLetteringDraft {
   align: 'start' | 'middle' | 'end'
   rotationDegrees: number
   layer: number
+  landmarkId?: string
 }
 
 export interface AISemanticFeatureBinding {
@@ -67,6 +78,7 @@ export interface AISemanticFeatureBinding {
   description: string
   role: AISemanticRole
   geometryIds: string[]
+  landmarkId?: string
 }
 
 export interface AIDecorationCandidateDraft {
@@ -94,6 +106,8 @@ export interface AIDecorationGeneration {
   model: string
   createdAt: string
   candidates: AIDecorationCandidateDraft[]
+  recognitionPlan?: AIDecorationRecognitionPlan
+  visualEvaluation?: AIDecorationVisualEvaluation
   usage?: {
     inputTokens?: number
     outputTokens?: number
@@ -260,6 +274,48 @@ export const AI_DECORATION_RESULT_SCHEMA = {
   required: ['candidates'],
 } as const
 
+type MutableObjectSchema = {
+  properties: Record<string, unknown>
+  required: string[]
+}
+
+type MutableDecorationSchema = MutableObjectSchema & {
+  properties: {
+    candidates: {
+      items: MutableObjectSchema
+    }
+  }
+}
+
+/**
+ * Build the candidate schema from a frozen recognition plan. Every visible
+ * primitive names one server-approved landmark directly; semantic feature
+ * bindings are then derived locally instead of being self-certified by the
+ * generation model.
+ */
+export function createAIDecorationResultSchema(
+  recognitionPlan: AIDecorationRecognitionPlan
+): Record<string, unknown> {
+  const schema = JSON.parse(JSON.stringify(AI_DECORATION_RESULT_SCHEMA)) as MutableDecorationSchema
+  const candidate = schema.properties.candidates.items
+  const landmarkIds = recognitionPlan.landmarks.map((landmark) => landmark.id)
+
+  delete candidate.properties.semanticFeatures
+  candidate.required = candidate.required.filter((name) => name !== 'semanticFeatures')
+  candidate.properties.subject = { type: 'string', enum: [recognitionPlan.subject] }
+
+  for (const collectionName of ['regions', 'strokes', 'lettering']) {
+    const collection = candidate.properties[collectionName] as { items: MutableObjectSchema }
+    collection.items.properties.landmarkId = {
+      type: 'string',
+      enum: landmarkIds,
+    }
+    collection.items.required.push('landmarkId')
+  }
+
+  return schema as unknown as Record<string, unknown>
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
@@ -314,8 +370,90 @@ function uniqueIds(items: Array<{ id: string }>, path: string): void {
   }
 }
 
-export function validateAIDecorationModelResult(value: unknown): AIDecorationModelResult {
+function bindingTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length > 1 && !['the', 'and', 'with', 'detail', 'stroke', 'region'].includes(token))
+}
+
+function bindingMatchScore(
+  feature: Pick<AISemanticFeatureBinding, 'name' | 'description'>,
+  rawReferences: readonly string[],
+  geometry: { id: string; name: string }
+): number {
+  const featureTokens = new Set(bindingTokens(`${feature.name} ${feature.description} ${rawReferences.join(' ')}`))
+  const geometryTokens = new Set(bindingTokens(`${geometry.id} ${geometry.name}`))
+  let score = 0
+  geometryTokens.forEach((token) => {
+    if (featureTokens.has(token)) score += 3
+  })
+  const normalizedGeometryId = geometry.id.toLowerCase().replace(/[^a-z0-9]/g, '')
+  rawReferences.forEach((reference) => {
+    const normalizedReference = reference.toLowerCase().replace(/[^a-z0-9]/g, '')
+    if (
+      normalizedReference
+      && normalizedGeometryId
+      && (
+        normalizedReference === normalizedGeometryId
+        || (
+          Math.min(normalizedReference.length, normalizedGeometryId.length) >= 4
+          && (normalizedReference.includes(normalizedGeometryId) || normalizedGeometryId.includes(normalizedReference))
+        )
+      )
+    ) score += 8
+  })
+  return score
+}
+
+function bestBindingGeometry(
+  feature: Pick<AISemanticFeatureBinding, 'name' | 'description'>,
+  rawReferences: readonly string[],
+  geometry: Array<{ id: string; name: string }>,
+  excludedIds: ReadonlySet<string>
+): { id: string; score: number } | undefined {
+  const matches = geometry
+    .filter((item) => !excludedIds.has(item.id))
+    .map((item) => ({ id: item.id, score: bindingMatchScore(feature, rawReferences, item) }))
+    .sort((first, second) => second.score - first.score || first.id.localeCompare(second.id))
+  const best = matches[0]
+  const runnerUp = matches[1]
+  if (!best || best.score < 6) return undefined
+  if (runnerUp && best.score - runnerUp.score < 3) return undefined
+  return best
+}
+
+function autoFeatureId(geometryId: string, existingIds: ReadonlySet<string>): string {
+  const base = `auto-${geometryId}`
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 36) || 'auto-detail'
+  let candidate = base
+  let suffix = 2
+  while (existingIds.has(candidate)) {
+    candidate = `${base.slice(0, 35)}-${suffix}`.slice(0, 40)
+    suffix += 1
+  }
+  return candidate
+}
+
+export function validateAIDecorationModelResult(
+  value: unknown,
+  recognitionPlan?: AIDecorationRecognitionPlan
+): AIDecorationModelResult {
   if (!isRecord(value)) throw new Error('AI decoration output must be an object')
+  const recognitionLandmarkIds = new Set(recognitionPlan?.landmarks.map((landmark) => landmark.id) ?? [])
+  const landmarkId = (rawValue: unknown, path: string): string | undefined => {
+    if (!recognitionPlan && rawValue === undefined) return undefined
+    const parsed = assertString(rawValue, path, 36)
+    if (recognitionPlan && !recognitionLandmarkIds.has(parsed)) {
+      throw new Error(`${path} must reference a landmark in the frozen recognition plan`)
+    }
+    return parsed
+  }
   const candidates = assertArray(value.candidates, 'candidates', 3, 3).map((rawCandidate, candidateIndex) => {
     const path = `candidates[${candidateIndex}]`
     if (!isRecord(rawCandidate)) throw new Error(`${path} must be an object`)
@@ -349,6 +487,7 @@ export function validateAIDecorationModelResult(value: unknown): AIDecorationMod
         colorSlot: assertEnum(rawRegion.colorSlot, AI_COLOR_SLOTS, `${regionPath}.colorSlot`),
         technique: assertEnum(rawRegion.technique, AI_DECORATION_TECHNIQUES, `${regionPath}.technique`),
         layer: assertInteger(rawRegion.layer, `${regionPath}.layer`, 0, 5),
+        landmarkId: landmarkId(rawRegion.landmarkId, `${regionPath}.landmarkId`),
       }
     })
 
@@ -365,6 +504,7 @@ export function validateAIDecorationModelResult(value: unknown): AIDecorationMod
         closed: Boolean(rawStroke.closed),
         technique: assertEnum(rawStroke.technique, ['wet-on-wet', 'piped-detail'] as const, `${strokePath}.technique`),
         layer: assertInteger(rawStroke.layer, `${strokePath}.layer`, 0, 5),
+        landmarkId: landmarkId(rawStroke.landmarkId, `${strokePath}.landmarkId`),
       }
     })
 
@@ -389,6 +529,7 @@ export function validateAIDecorationModelResult(value: unknown): AIDecorationMod
         align: assertEnum(rawLettering.align, ['start', 'middle', 'end'] as const, `${letteringPath}.align`),
         rotationDegrees: assertNumber(rawLettering.rotationDegrees, `${letteringPath}.rotationDegrees`, -30, 30),
         layer: assertInteger(rawLettering.layer, `${letteringPath}.layer`, 0, 5),
+        landmarkId: landmarkId(rawLettering.landmarkId, `${letteringPath}.landmarkId`),
       }
     })
 
@@ -398,42 +539,125 @@ export function validateAIDecorationModelResult(value: unknown): AIDecorationMod
     const geometry = [...regions, ...strokes, ...lettering]
     uniqueIds(geometry, `${path}.geometry`)
     const geometryIds = new Set(geometry.map((item) => item.id))
-    const semanticFeatures = assertArray(rawCandidate.semanticFeatures, `${path}.semanticFeatures`, 3, 8)
-      .map((rawFeature, featureIndex) => {
-        const featurePath = `${path}.semanticFeatures[${featureIndex}]`
-        if (!isRecord(rawFeature)) throw new Error(`${featurePath} must be an object`)
-        const boundIds = assertArray(rawFeature.geometryIds, `${featurePath}.geometryIds`, 1, 6)
-          .map((id, idIndex) => assertString(id, `${featurePath}.geometryIds[${idIndex}]`, 40))
-        const unknownIds = boundIds.filter((id) => !geometryIds.has(id))
-        if (unknownIds.length) {
-          throw new Error(`${featurePath}.geometryIds references unknown geometry: ${unknownIds.join(', ')}`)
-        }
-        return {
-          id: assertString(rawFeature.id, `${featurePath}.id`, 40),
-          name: assertString(rawFeature.name, `${featurePath}.name`, 80),
-          description: assertString(rawFeature.description, `${featurePath}.description`, 180),
-          role: assertEnum(rawFeature.role, AI_SEMANTIC_ROLES, `${featurePath}.role`),
-          geometryIds: [...new Set(boundIds)],
-        }
+    let semanticFeatures: AISemanticFeatureBinding[]
+    if (recognitionPlan) {
+      semanticFeatures = recognitionPlan.landmarks.flatMap((landmark) => {
+        const geometryIdsForLandmark = geometry
+          .filter((item) => item.landmarkId === landmark.id)
+          .map((item) => item.id)
+        if (!geometryIdsForLandmark.length) return []
+        return [{
+          id: landmark.id,
+          landmarkId: landmark.id,
+          name: landmark.name,
+          description: landmark.description,
+          role: landmark.role,
+          geometryIds: geometryIdsForLandmark,
+        }]
       })
-    uniqueIds(semanticFeatures, `${path}.semanticFeatures`)
-    if (semanticFeatures.filter((feature) => feature.role === 'signature').length < 2) {
-      throw new Error(`${path}.semanticFeatures requires at least two signature features`)
+    } else {
+      semanticFeatures = assertArray(rawCandidate.semanticFeatures, `${path}.semanticFeatures`, 3, 8)
+        .map((rawFeature, featureIndex) => {
+          const featurePath = `${path}.semanticFeatures[${featureIndex}]`
+          if (!isRecord(rawFeature)) throw new Error(`${featurePath} must be an object`)
+          const boundIds = assertArray(rawFeature.geometryIds, `${featurePath}.geometryIds`, 1, 6)
+            .map((id, idIndex) => assertString(id, `${featurePath}.geometryIds[${idIndex}]`, 40))
+          return {
+            id: assertString(rawFeature.id, `${featurePath}.id`, 40),
+            name: assertString(rawFeature.name, `${featurePath}.name`, 80),
+            description: assertString(rawFeature.description, `${featurePath}.description`, 180),
+            role: assertEnum(rawFeature.role, AI_SEMANTIC_ROLES, `${featurePath}.role`),
+            geometryIds: [...new Set(boundIds)],
+          }
+        })
+      uniqueIds(semanticFeatures, `${path}.semanticFeatures`)
+      if (semanticFeatures.filter((feature) => feature.role === 'signature').length < 2) {
+        throw new Error(`${path}.semanticFeatures requires at least two signature features`)
+      }
+
+      const claimedGeometryIds = new Set<string>()
+      semanticFeatures.forEach((feature) => {
+        const rawReferences = [...feature.geometryIds]
+        const resolved = feature.geometryIds.filter((id) => geometryIds.has(id))
+        const resolvedIds = new Set(resolved)
+        rawReferences.filter((id) => !geometryIds.has(id)).forEach((unknownId) => {
+          const match = bestBindingGeometry(feature, [unknownId], geometry, resolvedIds)
+          if (match && match.score > 0 && resolvedIds.size < 6) resolvedIds.add(match.id)
+        })
+        if (!resolvedIds.size) {
+          const match = bestBindingGeometry(feature, rawReferences, geometry, resolvedIds)
+          if (match && match.score > 0) resolvedIds.add(match.id)
+        }
+        feature.geometryIds = [...resolvedIds]
+        feature.geometryIds.forEach((id) => claimedGeometryIds.add(id))
+      })
+
+      const unresolvedSignatures = semanticFeatures.filter((feature) => (
+        feature.role === 'signature' && !feature.geometryIds.length
+      ))
+      if (unresolvedSignatures.length) {
+        throw new Error(`${path}.semanticFeatures could not resolve geometry for signature features: ${unresolvedSignatures.map((feature) => feature.id).join(', ')}`)
+      }
+
+      for (let index = semanticFeatures.length - 1; index >= 0; index -= 1) {
+        const feature = semanticFeatures[index]
+        if (!feature.geometryIds.length && feature.role !== 'signature' && semanticFeatures.length > 3) {
+          semanticFeatures.splice(index, 1)
+        }
+      }
+
+      const featureIds = new Set(semanticFeatures.map((feature) => feature.id))
+      geometry.filter((item) => !claimedGeometryIds.has(item.id)).forEach((item) => {
+        const availableFeatures = semanticFeatures.filter((feature) => feature.geometryIds.length < 6)
+        const featureMatches = availableFeatures
+          .map((feature) => ({ feature, score: bindingMatchScore(feature, [], item) }))
+          .sort((first, second) => second.score - first.score || first.feature.id.localeCompare(second.feature.id))
+        const bestFeature = featureMatches[0]
+        const runnerUp = featureMatches[1]
+        const selected = bestFeature?.score >= 3
+          && (!runnerUp || bestFeature.score - runnerUp.score >= 3)
+          ? bestFeature.feature
+          : undefined
+        if (selected) {
+          selected.geometryIds.push(item.id)
+        } else if (semanticFeatures.length < 8) {
+          const id = autoFeatureId(item.id, featureIds)
+          featureIds.add(id)
+          semanticFeatures.push({
+            id,
+            name: item.name,
+            description: `Additional generated icing detail: ${item.name}.`,
+            role: 'supporting',
+            geometryIds: [item.id],
+          })
+        }
+        claimedGeometryIds.add(item.id)
+      })
+
+      const emptyFeatures = semanticFeatures.filter((feature) => !feature.geometryIds.length)
+      if (emptyFeatures.length) {
+        throw new Error(`${path}.semanticFeatures could not resolve geometry for: ${emptyFeatures.map((feature) => feature.id).join(', ')}`)
+      }
+      const boundGeometryIds = new Set(semanticFeatures.flatMap((feature) => feature.geometryIds))
+      if (boundGeometryIds.size < 3) {
+        throw new Error(`${path}.semanticFeatures must bind at least three distinct decoration geometries`)
+      }
+      const unboundGeometryIds = [...geometryIds].filter((id) => !boundGeometryIds.has(id))
+      if (unboundGeometryIds.length) {
+        throw new Error(`${path}.semanticFeatures leaves geometry unbound: ${unboundGeometryIds.join(', ')}`)
+      }
     }
-    const boundGeometryIds = new Set(semanticFeatures.flatMap((feature) => feature.geometryIds))
-    if (boundGeometryIds.size < 3) {
-      throw new Error(`${path}.semanticFeatures must bind at least three distinct decoration geometries`)
-    }
-    const unboundGeometryIds = [...geometryIds].filter((id) => !boundGeometryIds.has(id))
-    if (unboundGeometryIds.length) {
-      throw new Error(`${path}.semanticFeatures leaves geometry unbound: ${unboundGeometryIds.join(', ')}`)
+
+    const subject = assertString(rawCandidate.subject, `${path}.subject`, 80)
+    if (recognitionPlan && subject.toLowerCase() !== recognitionPlan.subject.toLowerCase()) {
+      throw new Error(`${path}.subject must exactly match the frozen recognition subject`)
     }
 
     return {
       id: assertString(rawCandidate.id, `${path}.id`, 40),
       name: assertString(rawCandidate.name, `${path}.name`, 80),
       concept: assertString(rawCandidate.concept, `${path}.concept`, 240),
-      subject: assertString(rawCandidate.subject, `${path}.subject`, 80),
+      subject,
       recognitionStrategy: assertString(rawCandidate.recognitionStrategy, `${path}.recognitionStrategy`, 320),
       difficulty: assertEnum(rawCandidate.difficulty, ['easy', 'detailed'] as const, `${path}.difficulty`),
       estimatedMinutes: assertInteger(rawCandidate.estimatedMinutes, `${path}.estimatedMinutes`, 15, 240),
@@ -449,9 +673,26 @@ export function validateAIDecorationModelResult(value: unknown): AIDecorationMod
   return { candidates }
 }
 
-export function validateAIDecorationGeneration(value: unknown): AIDecorationGeneration {
+export function validateAIDecorationGeneration(
+  value: unknown,
+  options: { allowUnverifiedLegacy?: boolean } = {}
+): AIDecorationGeneration {
   if (!isRecord(value)) throw new Error('AI decoration generation must be an object')
-  const result = validateAIDecorationModelResult({ candidates: value.candidates })
+  const recognitionPlan = value.recognitionPlan === undefined
+    ? undefined
+    : validateAIRecognitionPlan(value.recognitionPlan)
+  if (!recognitionPlan && !options.allowUnverifiedLegacy) {
+    throw new Error('AI decoration generation requires a frozen recognitionPlan')
+  }
+  const result = validateAIDecorationModelResult({ candidates: value.candidates }, recognitionPlan)
+  let visualEvaluation: AIDecorationVisualEvaluation | undefined
+  if (value.visualEvaluation !== undefined) {
+    if (!recognitionPlan) throw new Error('visualEvaluation requires a recognitionPlan')
+    visualEvaluation = validateDecorationVisualEvaluation(value.visualEvaluation, result.candidates, recognitionPlan)
+  }
+  if (!visualEvaluation && !options.allowUnverifiedLegacy) {
+    throw new Error('AI decoration generation requires an independent visualEvaluation')
+  }
   const usage: NonNullable<AIDecorationGeneration['usage']> = {}
   if (isRecord(value.usage)) {
     if (typeof value.usage.inputTokens === 'number') usage.inputTokens = value.usage.inputTokens
@@ -463,6 +704,8 @@ export function validateAIDecorationGeneration(value: unknown): AIDecorationGene
     model: assertString(value.model, 'model', 128),
     createdAt: assertString(value.createdAt, 'createdAt', 64),
     candidates: result.candidates,
+    ...(recognitionPlan ? { recognitionPlan } : {}),
+    ...(visualEvaluation ? { visualEvaluation } : {}),
     ...(Object.keys(usage).length ? { usage } : {}),
   }
 }

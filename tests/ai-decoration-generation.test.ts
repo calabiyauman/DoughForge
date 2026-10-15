@@ -147,9 +147,13 @@ function generation(): AIDecorationGeneration {
 
 test('strict AI decoration parser accepts three bounded candidates and rejects invalid geometry', () => {
   const value = generation()
-  const parsed = validateAIDecorationGeneration(value)
+  const parsed = validateAIDecorationGeneration(value, { allowUnverifiedLegacy: true })
   assert.equal(parsed.candidates.length, 3)
   assert.equal(parsed.candidates[0].lettering[0].text, 'Mia')
+  assert.throws(
+    () => validateAIDecorationGeneration(value),
+    /requires a frozen recognitionPlan/
+  )
 
   const invalid = structuredClone(value)
   invalid.candidates[0].strokes[0].points[0].x = 1.2
@@ -167,6 +171,7 @@ test('AI candidates become ranked, registered, revision-bound cookie outcomes', 
     prompt: 'Lavender butterfly with Mia in piped script',
     title: 'Mia butterfly',
     physicalScale: 1.25,
+    allowUnverifiedLegacy: true,
   })
   const report = validateCookieProjectRevision(project)
 
@@ -198,6 +203,7 @@ test('candidate evaluator rejects geometry outside the cutter instead of relying
     prompt: 'Lavender butterfly with Mia in piped script',
     title: 'Butterfly',
     physicalScale: 1,
+    allowUnverifiedLegacy: true,
   })
   const decoration = structuredClone(project.decorations[0])
   decoration.regions[1].outer = decoration.regions[1].outer.map((point) => ({
@@ -220,6 +226,7 @@ test('cutter parameter rebasing preserves AI decoration and updates the shared p
     prompt: 'Lavender butterfly with Mia in piped script',
     title: 'Butterfly',
     physicalScale: 1,
+    allowUnverifiedLegacy: true,
   })
   const rebasedDesign = { ...design, profile: { ...design.profile, revision: 'rebased-test' } }
   const rebased = rebaseCookieProjectDesign(project, rebasedDesign, 1.6)

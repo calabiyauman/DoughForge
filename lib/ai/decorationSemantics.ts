@@ -3,6 +3,11 @@ import type {
   AINormalizedPoint,
   AISemanticFeatureBinding,
 } from './decorationPlan'
+import type {
+  AIDecorationRecognitionPlan,
+  AIRecognitionLandmark,
+  AIRecognitionRelationship,
+} from './decorationRecognition'
 
 export interface AIDecorationSemanticFinding {
   code: string
@@ -23,6 +28,8 @@ interface PrimitiveGeometry {
   id: string
   kind: 'ellipse' | 'polygon' | 'stroke' | 'lettering'
   points: AINormalizedPoint[]
+  landmarkId?: string
+  text?: string
 }
 
 const STOP_WORDS = new Set([
@@ -161,13 +168,24 @@ function geometryMap(candidate: AIDecorationCandidateDraft): Map<string, Primiti
           { x: region.centerX, y: region.centerY - region.radiusY },
         ]
       : region.points
-    result.set(region.id, { id: region.id, kind: region.kind, points })
+    result.set(region.id, { id: region.id, kind: region.kind, points, landmarkId: region.landmarkId })
   })
   candidate.strokes.forEach((stroke) => {
-    result.set(stroke.id, { id: stroke.id, kind: 'stroke', points: stroke.points })
+    result.set(stroke.id, { id: stroke.id, kind: 'stroke', points: stroke.points, landmarkId: stroke.landmarkId })
   })
   candidate.lettering.forEach((lettering) => {
-    result.set(lettering.id, { id: lettering.id, kind: 'lettering', points: [lettering.position] })
+    const halfWidth = lettering.maxWidthRatio / 2
+    const halfHeight = Math.max(0.025, lettering.fontSizeMm / 150)
+    result.set(lettering.id, {
+      id: lettering.id,
+      kind: 'lettering',
+      landmarkId: lettering.landmarkId,
+      text: lettering.text,
+      points: [
+        { x: lettering.position.x - halfWidth, y: lettering.position.y - halfHeight },
+        { x: lettering.position.x + halfWidth, y: lettering.position.y + halfHeight },
+      ],
+    })
   })
   return result
 }
@@ -543,6 +561,327 @@ function categorizedSubjectFindings(
   return { findings: [], requiredFeatureNames: [] }
 }
 
+function primitivesForLandmark(
+  geometry: Map<string, PrimitiveGeometry>,
+  landmarkId: string
+): PrimitiveGeometry[] {
+  return [...geometry.values()].filter((primitive) => primitive.landmarkId === landmarkId)
+}
+
+function landmarkSeverity(landmark: AIRecognitionLandmark): 'warning' | 'error' {
+  return landmark.required || landmark.role === 'signature' || Boolean(landmark.requiredText)
+    ? 'error'
+    : 'warning'
+}
+
+function zoneContains(
+  zone: AIRecognitionLandmark['zone'],
+  primitiveBounds: NonNullable<ReturnType<typeof bounds>>
+): boolean {
+  const upper = primitiveBounds.centerY >= 0.55
+  const lower = primitiveBounds.centerY <= 0.45
+  const left = primitiveBounds.centerX <= 0.45
+  const right = primitiveBounds.centerX >= 0.55
+  switch (zone) {
+    case 'any': return true
+    case 'full': return primitiveBounds.width >= 0.45 || primitiveBounds.height >= 0.45
+    case 'center': return (
+      primitiveBounds.centerX >= 0.3
+      && primitiveBounds.centerX <= 0.7
+      && primitiveBounds.centerY >= 0.3
+      && primitiveBounds.centerY <= 0.7
+    )
+    case 'upper': return upper
+    case 'lower': return lower
+    case 'left': return left
+    case 'right': return right
+    case 'upper-left': return upper && left
+    case 'upper-right': return upper && right
+    case 'lower-left': return lower && left
+    case 'lower-right': return lower && right
+  }
+}
+
+function distributionMatches(
+  landmark: AIRecognitionLandmark,
+  primitives: readonly PrimitiveGeometry[]
+): boolean {
+  if (landmark.distribution === 'free' || landmark.distribution === 'single') return true
+  const primitiveBounds = primitives
+    .map((primitive) => bounds([primitive]))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+  if (landmark.distribution === 'horizontal-pair') {
+    return primitiveBounds.length >= 2
+      && primitiveBounds.some((item) => item.centerX <= 0.45)
+      && primitiveBounds.some((item) => item.centerX >= 0.55)
+      && Math.max(...primitiveBounds.map((item) => item.centerY))
+        - Math.min(...primitiveBounds.map((item) => item.centerY)) <= 0.24
+  }
+  if (landmark.distribution === 'vertical-pair') {
+    return primitiveBounds.length >= 2
+      && primitiveBounds.some((item) => item.centerY <= 0.45)
+      && primitiveBounds.some((item) => item.centerY >= 0.55)
+      && Math.max(...primitiveBounds.map((item) => item.centerX))
+        - Math.min(...primitiveBounds.map((item) => item.centerX)) <= 0.24
+  }
+  if (landmark.distribution === 'horizontal-row') {
+    const xSpan = Math.max(...primitiveBounds.map((item) => item.centerX))
+      - Math.min(...primitiveBounds.map((item) => item.centerX))
+    const ySpan = Math.max(...primitiveBounds.map((item) => item.centerY))
+      - Math.min(...primitiveBounds.map((item) => item.centerY))
+    return primitiveBounds.length >= 2 && xSpan >= 0.18 && ySpan <= 0.24
+  }
+  if (landmark.distribution === 'vertical-stack') {
+    const xSpan = Math.max(...primitiveBounds.map((item) => item.centerX))
+      - Math.min(...primitiveBounds.map((item) => item.centerX))
+    const ySpan = Math.max(...primitiveBounds.map((item) => item.centerY))
+      - Math.min(...primitiveBounds.map((item) => item.centerY))
+    return primitiveBounds.length >= 2 && ySpan >= 0.18 && xSpan <= 0.24
+  }
+  if (landmark.distribution === 'cluster') {
+    const xSpan = Math.max(...primitiveBounds.map((item) => item.centerX))
+      - Math.min(...primitiveBounds.map((item) => item.centerX))
+    const ySpan = Math.max(...primitiveBounds.map((item) => item.centerY))
+      - Math.min(...primitiveBounds.map((item) => item.centerY))
+    return primitiveBounds.length >= 2 && Math.max(xSpan, ySpan) >= 0.08
+  }
+  if (landmark.distribution === 'radial') {
+    if (primitiveBounds.length < 3) return false
+    const xSpan = Math.max(...primitiveBounds.map((item) => item.centerX))
+      - Math.min(...primitiveBounds.map((item) => item.centerX))
+    const ySpan = Math.max(...primitiveBounds.map((item) => item.centerY))
+      - Math.min(...primitiveBounds.map((item) => item.centerY))
+    return xSpan >= 0.18 && ySpan >= 0.18
+  }
+  return true
+}
+
+function geometryKindMatches(
+  landmark: AIRecognitionLandmark,
+  primitives: readonly PrimitiveGeometry[]
+): boolean {
+  if (landmark.geometryKind === 'either') return true
+  if (landmark.geometryKind === 'region') {
+    return primitives.some((primitive) => primitive.kind === 'ellipse' || primitive.kind === 'polygon')
+  }
+  return primitives.some((primitive) => primitive.kind === landmark.geometryKind)
+}
+
+function boxesOverlap(
+  first: NonNullable<ReturnType<typeof bounds>>,
+  second: NonNullable<ReturnType<typeof bounds>>
+): boolean {
+  return first.minX <= second.maxX
+    && first.maxX >= second.minX
+    && first.minY <= second.maxY
+    && first.maxY >= second.minY
+}
+
+function relationMatches(
+  relationship: AIRecognitionRelationship,
+  fromPrimitives: readonly PrimitiveGeometry[],
+  toPrimitives: readonly PrimitiveGeometry[]
+): boolean {
+  const from = bounds(fromPrimitives)
+  const to = bounds(toPrimitives)
+  if (!from || !to) return false
+  switch (relationship.relation) {
+    case 'above': return from.centerY >= to.centerY + 0.06
+    case 'below': return from.centerY <= to.centerY - 0.06
+    case 'left-of': return from.centerX <= to.centerX - 0.06
+    case 'right-of': return from.centerX >= to.centerX + 0.06
+    case 'inside': return (
+      from.minX >= to.minX - 0.03
+      && from.maxX <= to.maxX + 0.03
+      && from.minY >= to.minY - 0.03
+      && from.maxY <= to.maxY + 0.03
+    )
+    case 'surrounds': return (
+      to.minX >= from.minX - 0.03
+      && to.maxX <= from.maxX + 0.03
+      && to.minY >= from.minY - 0.03
+      && to.maxY <= from.maxY + 0.03
+    )
+    case 'overlaps': return boxesOverlap(from, to)
+    case 'centered-with': return Math.abs(from.centerX - to.centerX) <= 0.1
+      && Math.abs(from.centerY - to.centerY) <= 0.14
+    case 'mirrors': return (
+      Math.abs((from.centerX + to.centerX) - 1) <= 0.16
+      && Math.abs(from.centerY - to.centerY) <= 0.16
+      && Math.abs(from.width - to.width) <= 0.2
+      && Math.abs(from.height - to.height) <= 0.2
+    )
+    case 'crosses': {
+      const fromSegments = fromPrimitives.flatMap(primitiveSegments)
+      const toSegments = toPrimitives.flatMap(primitiveSegments)
+      return fromSegments.some((first) => toSegments.some((second) => Boolean(interiorIntersection(first, second))))
+    }
+  }
+}
+
+function normalizedText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+function recognitionPlanFindings(
+  candidate: AIDecorationCandidateDraft,
+  geometry: Map<string, PrimitiveGeometry>,
+  recognitionPlan: AIDecorationRecognitionPlan
+): {
+  findings: AIDecorationSemanticFinding[]
+  requiredFeatureNames: string[]
+  coveredFeatureIds: string[]
+} {
+  const findings: AIDecorationSemanticFinding[] = []
+  const declaredLandmarkIds = new Set(recognitionPlan.landmarks.map((landmark) => landmark.id))
+  const coveredFeatureIds: string[] = []
+
+  if (normalizedText(candidate.subject) !== normalizedText(recognitionPlan.subject)) {
+    findings.push({
+      code: 'recognition_subject_mismatch',
+      severity: 'error',
+      message: `The decoration must depict the frozen subject "${recognitionPlan.subject}".`,
+      featureIds: [],
+    })
+  }
+
+  const unassigned = [...geometry.values()].filter((primitive) => !primitive.landmarkId)
+  if (unassigned.length) {
+    findings.push({
+      code: 'unassigned_landmark_geometry',
+      severity: 'error',
+      message: `Every visible icing element must bind directly to a recognition landmark: ${unassigned.map((item) => item.id).join(', ')}.`,
+      featureIds: [],
+    })
+  }
+  const unknown = [...geometry.values()].filter((primitive) => (
+    primitive.landmarkId && !declaredLandmarkIds.has(primitive.landmarkId)
+  ))
+  if (unknown.length) {
+    findings.push({
+      code: 'unknown_landmark_geometry',
+      severity: 'error',
+      message: `Icing geometry references landmarks outside the frozen plan: ${unknown.map((item) => item.id).join(', ')}.`,
+      featureIds: [],
+    })
+  }
+
+  recognitionPlan.landmarks.forEach((landmark) => {
+    const primitives = primitivesForLandmark(geometry, landmark.id)
+    if (!primitives.length) {
+      findings.push({
+        code: landmark.required
+          ? 'missing_required_landmark'
+          : landmark.role === 'signature'
+            ? 'missing_signature_landmark'
+            : 'missing_planned_landmark',
+        severity: landmarkSeverity(landmark),
+        message: `The frosting is missing ${landmark.name}: ${landmark.description}`,
+        featureIds: [landmark.id],
+      })
+      return
+    }
+    coveredFeatureIds.push(landmark.id)
+    const primitiveBounds = bounds(primitives)
+    const severity = landmarkSeverity(landmark)
+    if (
+      primitives.length < landmark.minimumInstances
+      || primitives.length > landmark.maximumInstances
+    ) {
+      const requiredCount = landmark.minimumInstances === landmark.maximumInstances
+        ? `exactly ${landmark.minimumInstances}`
+        : `between ${landmark.minimumInstances} and ${landmark.maximumInstances}`
+      findings.push({
+        code: 'landmark_instance_count_mismatch',
+        severity,
+        message: `${landmark.name} requires ${requiredCount} distinct visible icing elements; found ${primitives.length}.`,
+        featureIds: [landmark.id],
+      })
+    }
+    if (!primitiveBounds || !zoneContains(landmark.zone, primitiveBounds)) {
+      findings.push({
+        code: 'landmark_zone_mismatch',
+        severity,
+        message: `${landmark.name} must appear in the ${landmark.zone} area of the cookie.`,
+        featureIds: [landmark.id],
+      })
+    }
+    if (
+      !primitiveBounds
+      || primitiveBounds.width + 0.01 < landmark.minimumWidthRatio
+      || primitiveBounds.height + 0.01 < landmark.minimumHeightRatio
+    ) {
+      findings.push({
+        code: 'landmark_scale_mismatch',
+        severity,
+        message: `${landmark.name} is too small to carry its planned recognition role.`,
+        featureIds: [landmark.id],
+      })
+    }
+    if (!geometryKindMatches(landmark, primitives)) {
+      findings.push({
+        code: 'landmark_geometry_kind_mismatch',
+        severity,
+        message: `${landmark.name} requires ${landmark.geometryKind} icing geometry.`,
+        featureIds: [landmark.id],
+      })
+    }
+    if (!distributionMatches(landmark, primitives)) {
+      findings.push({
+        code: 'landmark_distribution_mismatch',
+        severity,
+        message: `${landmark.name} must use a ${landmark.distribution} layout.`,
+        featureIds: [landmark.id],
+      })
+    }
+    if (landmark.requiredText) {
+      const exactTextPresent = primitives.some((primitive) => (
+        primitive.kind === 'lettering'
+        && normalizedText(primitive.text ?? '') === normalizedText(landmark.requiredText)
+      ))
+      if (!exactTextPresent) {
+        findings.push({
+          code: 'required_text_mismatch',
+          severity: 'error',
+          message: `${landmark.name} must show the exact requested text "${landmark.requiredText}".`,
+          featureIds: [landmark.id],
+        })
+      }
+    }
+  })
+
+  recognitionPlan.relationships.forEach((relationship) => {
+    const from = primitivesForLandmark(geometry, relationship.fromLandmarkId)
+    const to = primitivesForLandmark(geometry, relationship.toLandmarkId)
+    if (!from.length || !to.length) {
+      if (relationship.required) {
+        findings.push({
+          code: 'required_relationship_endpoint_missing',
+          severity: 'error',
+          message: `${relationship.fromLandmarkId} must be ${relationship.relation} ${relationship.toLandmarkId}, but one or both landmarks are missing.`,
+          featureIds: [relationship.fromLandmarkId, relationship.toLandmarkId],
+        })
+      }
+      return
+    }
+    if (relationMatches(relationship, from, to)) return
+    findings.push({
+      code: 'landmark_relationship_mismatch',
+      severity: relationship.required ? 'error' : 'warning',
+      message: `${relationship.fromLandmarkId} must be ${relationship.relation} ${relationship.toLandmarkId}.`,
+      featureIds: [relationship.fromLandmarkId, relationship.toLandmarkId],
+    })
+  })
+
+  return {
+    findings,
+    requiredFeatureNames: recognitionPlan.landmarks
+      .filter((landmark) => landmark.required || landmark.role === 'signature')
+      .map((landmark) => landmark.name),
+    coveredFeatureIds: coveredFeatureIds.sort(),
+  }
+}
+
 export function getDecorationSubjectGuidance(description: string): string {
   const normalized = description.toLowerCase()
   if (/\bbarn(?:yard)?\b/.test(normalized)) {
@@ -574,10 +913,24 @@ export function getDecorationSubjectGuidance(description: string): string {
 
 export function evaluateDecorationSemantics(
   description: string,
-  candidate: AIDecorationCandidateDraft
+  candidate: AIDecorationCandidateDraft,
+  recognitionPlan?: AIDecorationRecognitionPlan
 ): AIDecorationSemanticAssessment {
   const findings: AIDecorationSemanticFinding[] = []
   const geometry = geometryMap(candidate)
+  if (recognitionPlan) {
+    const planned = recognitionPlanFindings(candidate, geometry, recognitionPlan)
+    const errorCount = planned.findings.filter((finding) => finding.severity === 'error').length
+    const warningCount = planned.findings.length - errorCount
+    const score = Math.max(0, Math.min(100, 100 - errorCount * 22 - warningCount * 6))
+    return {
+      score,
+      disposition: errorCount ? 'reject' : warningCount ? 'repair' : 'eligible',
+      findings: planned.findings,
+      coveredFeatureIds: planned.coveredFeatureIds,
+      requiredFeatureNames: planned.requiredFeatureNames,
+    }
+  }
   const boundIds = new Set(candidate.semanticFeatures.flatMap((feature) => feature.geometryIds))
   if (!candidateNamesRequestedSubject(description, candidate.subject)) {
     findings.push({

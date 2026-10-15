@@ -1,6 +1,9 @@
 import type { AIDecorationCandidateDraft, AIDecorationGeneration, AIColorSlot } from '@/lib/ai/decorationPlan'
-import { evaluateDecorationSemantics } from '@/lib/ai/decorationSemantics'
-import type { ClosedContour, DesignSpec, Point2D } from '@/lib/design/types'
+import {
+  evaluateDecorationSemantics,
+  type AIDecorationSemanticAssessment,
+} from '@/lib/ai/decorationSemantics'
+import type { ClosedContour, DesignSpec, JsonValue, Point2D } from '@/lib/design/types'
 import { evaluateDecorationCandidate, rankDecorationCandidates, type DecorationCandidateEvaluation } from './candidateEvaluation'
 import { nearestTrustedColor } from './colorCatalog'
 import { PROFESSIONAL_DECORATOR_PROFILE } from './decoratorProfile'
@@ -161,6 +164,13 @@ function normalizedPoint(point: Point2D, bounds: Bounds): Point2D {
   return {
     x: bounds.minX + bounds.width * point.x,
     y: bounds.minY + bounds.height * point.y,
+  }
+}
+
+function canvasPoint(point: Point2D, bounds: Bounds): Point2D {
+  return {
+    x: bounds.width ? (point.x - bounds.minX) / bounds.width : 0.5,
+    y: bounds.height ? (point.y - bounds.minY) / bounds.height : 0.5,
   }
 }
 
@@ -333,7 +343,6 @@ function candidateParts(
   const outlineBounds = getBounds(outline.points)
   const anchor = findInteriorAnchor(outline.points, holes, outlineBounds)
   const prefix = `${slug(base.id)}:ai:${candidateIndex + 1}:${slug(candidate.id)}`
-  const semanticAssessment = evaluateDecorationSemantics(requestedDescription, candidate)
   const palette = buildPalette(candidate, prefix)
   const colorsBySlot = new Map<AIColorSlot, string>()
   candidate.palette.forEach((color, index) => {
@@ -368,7 +377,12 @@ function candidateParts(
       holes: [],
       sourceGeometryIds: [],
       fillColorId: colorId(region.colorSlot),
-      metadata: { technique: region.technique, layer: region.layer, aiSourceId: region.id },
+      metadata: {
+        technique: region.technique,
+        layer: region.layer,
+        aiSourceId: region.id,
+        ...(region.landmarkId ? { landmarkId: region.landmarkId } : {}),
+      },
     })
   })
 
@@ -384,7 +398,12 @@ function candidateParts(
     colorId: colorId(stroke.colorSlot),
     lineCap: 'round',
     lineJoin: 'round',
-    metadata: { technique: stroke.technique, layer: stroke.layer, aiSourceId: stroke.id },
+    metadata: {
+      technique: stroke.technique,
+      layer: stroke.layer,
+      aiSourceId: stroke.id,
+      ...(stroke.landmarkId ? { landmarkId: stroke.landmarkId } : {}),
+    },
   }))
 
   const lettering: DecorationLettering[] = candidate.lettering.map((item) => ({
@@ -401,8 +420,61 @@ function candidateParts(
     align: item.align,
     rotationDegrees: item.rotationDegrees,
     sourceGeometryIds: [],
-    metadata: { layer: item.layer, aiSourceId: item.id },
+    metadata: {
+      layer: item.layer,
+      aiSourceId: item.id,
+      ...(item.landmarkId ? { landmarkId: item.landmarkId } : {}),
+    },
   }))
+  const registeredCandidate: AIDecorationCandidateDraft = {
+    ...candidate,
+    regions: candidate.regions.map((region, index) => ({
+      ...region,
+      kind: 'polygon',
+      points: regions[index + 1].outer.map((point) => canvasPoint(point, outlineBounds)),
+    })),
+    strokes: candidate.strokes.map((stroke, index) => ({
+      ...stroke,
+      points: strokes[index].points.map((point) => canvasPoint(point, outlineBounds)),
+    })),
+    lettering: candidate.lettering.map((item, index) => ({
+      ...item,
+      position: canvasPoint(lettering[index].position, outlineBounds),
+    })),
+  }
+  let semanticAssessment: AIDecorationSemanticAssessment = evaluateDecorationSemantics(
+    requestedDescription,
+    registeredCandidate,
+    generation.recognitionPlan
+  )
+  const visualAssessment = generation.visualEvaluation?.assessments
+    .find((assessment) => assessment.candidateId === candidate.id)
+  if (visualAssessment) {
+    const combinedScore = Math.round(
+      semanticAssessment.score * 0.45
+      + visualAssessment.subjectConfidence * 0.2
+      + visualAssessment.requestFidelityScore * 0.2
+      + visualAssessment.layoutScore * 0.15
+    )
+    semanticAssessment = {
+      ...semanticAssessment,
+      score: visualAssessment.passed ? combinedScore : Math.min(combinedScore, 45),
+      disposition: visualAssessment.passed ? semanticAssessment.disposition : 'reject',
+      findings: visualAssessment.passed
+        ? semanticAssessment.findings
+        : [
+            ...semanticAssessment.findings,
+            {
+              code: 'visual_recognition_failed',
+              severity: 'error',
+              message: visualAssessment.repairFeedback,
+              featureIds: visualAssessment.landmarkChecks
+                .filter((check) => !check.present || check.confidence < 65)
+                .map((check) => check.landmarkId),
+            },
+          ],
+    }
+  }
   const decoration: DecorationSpec = {
     schema: DECORATION_SPEC_SCHEMA,
     version: DECORATION_SPEC_VERSION,
@@ -434,8 +506,12 @@ function candidateParts(
         name: feature.name,
         description: feature.description,
         role: feature.role,
+        ...(feature.landmarkId ? { landmarkId: feature.landmarkId } : {}),
         geometryIds: [...feature.geometryIds],
       })),
+      ...(generation.recognitionPlan
+        ? { recognitionPlan: generation.recognitionPlan as unknown as JsonValue }
+        : {}),
       semanticScore: semanticAssessment.score,
       semanticDisposition: semanticAssessment.disposition,
       semanticFindings: semanticAssessment.findings.map((finding) => ({
@@ -445,6 +521,15 @@ function candidateParts(
         featureIds: [...finding.featureIds],
       })),
       coveredSemanticFeatureIds: semanticAssessment.coveredFeatureIds,
+      ...(visualAssessment ? {
+        visualRecognitionPassed: visualAssessment.passed,
+        visualSubjectConfidence: visualAssessment.subjectConfidence,
+        visualRequestFidelityScore: visualAssessment.requestFidelityScore,
+        visualLayoutScore: visualAssessment.layoutScore,
+        visualDecoratorFidelityScore: visualAssessment.decoratorFidelityScore,
+        visualGenericSubstitutionDetected: visualAssessment.genericSubstitutionDetected,
+        visualRepairFeedback: visualAssessment.repairFeedback,
+      } : {}),
       model: generation.model,
       decoratorProfileId: PROFESSIONAL_DECORATOR_PROFILE.id,
     },
@@ -477,6 +562,7 @@ function candidateParts(
 
 export interface AIProjectOptions extends PrototypeProjectOptions {
   physicalScale?: number
+  allowUnverifiedLegacy?: boolean
 }
 
 export function createAIEnhancedCookieProject(
@@ -485,6 +571,9 @@ export function createAIEnhancedCookieProject(
   options: AIProjectOptions = {}
 ): CookieProjectRevision {
   if (!generation.candidates.length) throw new Error('AI decoration generation did not contain candidates')
+  if ((!generation.recognitionPlan || !generation.visualEvaluation) && !options.allowUnverifiedLegacy) {
+    throw new Error('AI decoration generation requires frozen recognition and independent visual evaluation')
+  }
   const physicalScale = options.physicalScale ?? 1
   const base = createPrototypeCookieProject(design, { ...options, physicalScale })
   const requestedDescription = options.prompt ?? design.name

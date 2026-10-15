@@ -1,14 +1,22 @@
 import OpenAI from 'openai'
 import { createHash, randomUUID } from 'crypto'
 import {
-  AI_DECORATION_RESULT_SCHEMA,
+  createAIDecorationResultSchema,
   validateAIDecorationModelResult,
   type AIDecorationGeneration
 } from '@/lib/ai/decorationPlan'
+import { evaluateDecorationSemantics } from '@/lib/ai/decorationSemantics'
 import {
-  evaluateDecorationSemantics,
-  getDecorationSubjectGuidance
-} from '@/lib/ai/decorationSemantics'
+  AI_RECOGNITION_PLAN_SCHEMA,
+  validateAIRecognitionPlan,
+  type AIDecorationRecognitionPlan,
+} from '@/lib/ai/decorationRecognition'
+import { renderDecorationCandidatePng } from '@/lib/ai/decorationRaster'
+import {
+  createDecorationVisualEvaluationSchema,
+  validateDecorationVisualEvaluation,
+  type AIDecorationVisualEvaluation,
+} from '@/lib/ai/decorationVisualEvaluation'
 import {
   closeOutline,
   cleanClosedOutline,
@@ -48,6 +56,8 @@ const RATE_LIMIT_MAX_REQUESTS = 10
 const MAX_BODY_BYTES = 2_048
 const MAX_DESCRIPTION_LENGTH = 200
 const MAX_GENERATION_ATTEMPTS = 2
+const OPENAI_CALL_TIMEOUT_MS = 25_000
+const OPENAI_ROUTE_DEADLINE_MS = 105_000
 const PROFESSIONAL_PROFILE_OFFSETS_MM = [6.35, -2.79] as const
 
 const globalForRateLimit = globalThis as typeof globalThis & {
@@ -197,17 +207,24 @@ function normalizedOutlineForDecoration(points: readonly Point[]): Point[] {
     }))
 }
 
-async function generateDecorationCandidates(
+interface RecognitionPlanResult {
+  plan: AIDecorationRecognitionPlan
+  usage?: {
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+  }
+}
+
+async function generateRecognitionPlan(
   openai: OpenAI,
   model: string,
   description: string,
   shape: ShapeResponse,
-  safetyIdentifier: string
-): Promise<AIDecorationGeneration> {
-  const generationId = randomUUID()
-  const createdAt = new Date().toISOString()
+  safetyIdentifier: string,
+  signal: AbortSignal
+): Promise<RecognitionPlanResult> {
   const outline = normalizedOutlineForDecoration(shape.points)
-  const subjectGuidance = getDecorationSubjectGuidance(description)
   let repairFeedback = ''
   let lastError: unknown
   let inputTokens = 0
@@ -221,14 +238,197 @@ async function generateDecorationCandidates(
         store: false,
         safety_identifier: safetyIdentifier,
         instructions: [
+          'You are the independent visual-recognition art director for a professional custom sugar-cookie studio.',
+          'Analyze the customer request and create a frozen recognition plan before any decoration geometry is drawn.',
+          'Name the literal requested subject or full multi-entity composition; never replace it with a generic category such as icon, logo, object, animal, or cookie.',
+          'Preserve every identity-bearing entity, accessory, pose, direction, number, and exact requested wordmark or personalization.',
+          'Choose three to seven concrete visible landmarks that make the icing recognizable without relying on the cutter edge.',
+          'Mark at least two identity-critical landmarks as signature and required. Mark every customer-requested entity, accessory, count, pose-defining part, and exact text as required; only genuinely optional ornaments may use required=false.',
+          'Repeat each concrete customer-requested element in the name or description of a required landmark; repeating it only in subject, visualThesis, negativeCues, or decoratorDirection does not preserve it.',
+          'Generic borders, circles, badges, trim, and decorative dots are not identity landmarks and may never be used as required or signature substitutes.',
+          'Use supporting or accent landmarks only when they strengthen the requested identity; do not invent unrelated motifs.',
+          'The normalized canvas uses x=0..1 left-to-right and y=0..1 bottom-to-top.',
+          'Give every landmark a truthful concrete zone, visible span, primitive kind, minimum instance count, maximum instance count, and distribution.',
+          'For an exact requested count, set minimumInstances and maximumInstances to that same count. A single item must be 1 and 1; a pair must be 2 and 2.',
+          'Use horizontal-pair for exactly two left/right features, vertical-pair for exactly two stacked features, horizontal-row or vertical-stack for repeated subjects in a line, cluster for a grouped set, and radial only for three or more elements surrounding a center.',
+          'Use requiredText only for exact visible words requested by the customer; otherwise return an empty string.',
+          'Add one or more testable spatial relationships. Required relationships must be essential to recognizing the requested layout.',
+          'Use crosses only for two genuinely intersecting line landmarks, mirrors for distinct bilateral landmarks, and inside only when one feature is visibly enclosed by another.',
+          'List concrete failure modes in negativeCues, including likely generic substitutions or swapped layout.',
+          'Do not emit icing geometry or candidate concepts. This plan will be frozen and used to judge a separate generation call.',
+        ].join(' '),
+        input: [
+          `Customer request: ${description}`,
+          `Validated cutter category: ${shape.category}`,
+          `Normalized exterior outline (${outline.length} points): ${JSON.stringify(outline)}`,
+          repairFeedback,
+        ].filter(Boolean).join('\n'),
+        max_output_tokens: 4_000,
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'cookie_recognition_plan',
+            strict: true,
+            schema: AI_RECOGNITION_PLAN_SCHEMA,
+          },
+        },
+      }, { signal })
+      if (response.usage) {
+        inputTokens += response.usage.input_tokens
+        outputTokens += response.usage.output_tokens
+        totalTokens += response.usage.total_tokens
+      }
+      if (!response.output_text) throw new Error('OpenAI returned no recognition plan')
+      return {
+        plan: validateAIRecognitionPlan(JSON.parse(response.output_text), description),
+        ...(totalTokens ? { usage: { inputTokens, outputTokens, totalTokens } } : {}),
+      }
+    } catch (error) {
+      lastError = error
+      const message = error instanceof Error ? error.message : 'unknown recognition-plan error'
+      repairFeedback = [
+        'The previous recognition plan was rejected.',
+        `Return a corrected complete plan. Validation feedback: ${message.slice(0, 600)}`,
+      ].join(' ')
+    }
+  }
+
+  throw lastError ?? new Error('OpenAI returned no usable recognition plan')
+}
+
+interface VisualEvaluationResult {
+  evaluation: AIDecorationVisualEvaluation
+  usage?: {
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+  }
+}
+
+async function evaluateDecorationCandidatesVisually(
+  openai: OpenAI,
+  model: string,
+  description: string,
+  recognitionPlan: AIDecorationRecognitionPlan,
+  candidates: AIDecorationGeneration['candidates'],
+  normalizedOutline: readonly Point[],
+  safetyIdentifier: string,
+  signal: AbortSignal
+): Promise<VisualEvaluationResult> {
+  const content = [
+    {
+      type: 'input_text' as const,
+      text: [
+        `Original customer request: ${description}`,
+        `Frozen recognition plan: ${JSON.stringify(recognitionPlan)}`,
+        'Each image uses the same neutral square cookie canvas so the cutter silhouette cannot reveal the subject. Judge only the visible frosting pixels, not the candidate id or written plan.',
+      ].join('\n'),
+    },
+    ...candidates.flatMap((candidate) => [
+      {
+        type: 'input_text' as const,
+        text: `Candidate image: ${candidate.id}`,
+      },
+      {
+        type: 'input_image' as const,
+        detail: 'high' as const,
+        image_url: `data:image/png;base64,${renderDecorationCandidatePng(
+          candidate,
+          normalizedOutline,
+          512,
+          { neutralizeOutline: true }
+        ).toString('base64')}`,
+      },
+    ]),
+  ]
+  const response = await openai.responses.create({
+    model,
+    store: false,
+    safety_identifier: safetyIdentifier,
+    instructions: [
+      'You are an independent visual quality-control critic for professional custom royal-icing cookies.',
+      'Evaluate only what is visibly rendered in each candidate image. Do not award credit because the prompt or recognition plan names a feature.',
+      'Decide whether an unprompted viewer would recognize the requested subject from the frosting alone.',
+      'Check every frozen landmark independently and lower confidence when a primitive is merely present but has the wrong shape, count, scale, or placement.',
+      'For every landmark, report the number of visibly distinct instances and separately judge recognizable geometry, placement, distribution, and exact requested text.',
+      'For every frozen relationship, judge whether the rendered pixels visibly satisfy it; do not infer a relationship from the written plan.',
+      'Evaluate the complete customer request, including all entities, pose, direction, accessories, colors, counts, and exact visible text.',
+      'Set allRequestedElementsVisible=false when any explicit entity, count, pose, accessory, color, or exact text is absent or only implied.',
+      'Treat a generic badge, medallion, circle, border, or unrelated cute motif as a generic substitution when it replaces subject identity.',
+      'Layout score measures the requested spatial composition. Request fidelity measures all explicit customer details, not only the primary noun.',
+      'Decorator fidelity measures whether the result looks like intentional, cute, polished royal icing with practical line weights and color blocking.',
+      'Use conservative scores. A score above 70 means the requirement is clearly visible, not merely inferable from the cutter silhouette.',
+      'For a passing image, repairFeedback should say what must be preserved. For a failing image, name the most important visible correction.',
+    ].join(' '),
+    input: [{ role: 'user', content }],
+    max_output_tokens: 8_000,
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'cookie_decoration_visual_evaluation',
+        strict: true,
+        schema: createDecorationVisualEvaluationSchema(
+          candidates.map((candidate) => candidate.id),
+          recognitionPlan
+        ),
+      },
+    },
+  }, { signal })
+  if (!response.output_text) throw new Error('OpenAI returned no visual decoration evaluation')
+  return {
+    evaluation: validateDecorationVisualEvaluation(
+      JSON.parse(response.output_text),
+      candidates,
+      recognitionPlan
+    ),
+    ...(response.usage ? {
+      usage: {
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+        totalTokens: response.usage.total_tokens,
+      },
+    } : {}),
+  }
+}
+
+async function generateDecorationCandidates(
+  openai: OpenAI,
+  model: string,
+  description: string,
+  shape: ShapeResponse,
+  safetyIdentifier: string,
+  recognitionPlanResult: RecognitionPlanResult,
+  visualModel: string,
+  signal: AbortSignal
+): Promise<AIDecorationGeneration> {
+  const generationId = randomUUID()
+  const createdAt = new Date().toISOString()
+  const outline = normalizedOutlineForDecoration(shape.points)
+  const recognitionPlan = recognitionPlanResult.plan
+  let repairFeedback = ''
+  let lastError: unknown
+  let inputTokens = recognitionPlanResult.usage?.inputTokens ?? 0
+  let outputTokens = recognitionPlanResult.usage?.outputTokens ?? 0
+  let totalTokens = recognitionPlanResult.usage?.totalTokens ?? 0
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await openai.responses.create({
+        model,
+        store: false,
+        safety_identifier: safetyIdentifier,
+        instructions: [
           'You are a senior custom sugar-cookie decorator and production design planner.',
           'Create exactly three distinct royal-icing decoration candidates registered to the supplied normalized exterior outline.',
           'The normalized design canvas uses x=0..1 left-to-right and y=0..1 bottom-to-top.',
           'The icing alone must identify the customer request. Do not rely on the cutter edge to provide the subject meaning.',
           'Treat the cutter outline as authoritative. Keep every detail comfortably inside it and preserve recognizable subject anatomy.',
-          'For every visible region, stroke, or lettering item, create a semanticFeatures binding that names what it depicts.',
-          'Set candidate.subject to the concise literal subject noun from the customer request; do not use a color, style, event, or generic cookie label as the subject.',
-          'Each candidate needs at least two signature landmarks, at least three distinct bound geometries, and one restrained playful accent.',
+          'The supplied recognition plan is frozen and authoritative. Do not rename, omit, replace, or reinterpret its signature landmarks.',
+          'Set candidate.subject to recognitionPlan.subject exactly.',
+          'Every visible region, stroke, and lettering item must set landmarkId to the exact recognition-plan landmark it visibly depicts.',
+          'Cover every required and signature landmark with geometry that satisfies its zone, minimum span, exact or bounded instance count, distribution, and required relationships.',
+          'Use separate primitives for repeated features such as paired eyes, wheels, wings, or petals so their count and layout can be verified.',
+          'Any playful accent must use a declared supporting or accent landmark; never invent an unrelated motif.',
           'Never substitute a generic inset border, medallion, large unrelated circle, badge, or abstract chevron for subject landmarks.',
           'Use 4 to 6 coordinated colors. The base color slot is required. Never invent brands, product SKUs, prices, recipes, or safety claims.',
           'Use flood regions for large areas, wet-on-wet for small flat marks, and piped-detail for raised line-work.',
@@ -245,7 +445,7 @@ async function generateDecorationCandidates(
         input: [
           `Customer request: ${description}`,
           `Validated cutter category: ${shape.category}`,
-          `Subject-specific art direction: ${subjectGuidance}`,
+          `Frozen recognition plan: ${JSON.stringify(recognitionPlan)}`,
           `Normalized exterior outline (${outline.length} points): ${JSON.stringify(outline)}`,
           'All candidate point coordinates and centers must lie between 0.04 and 0.96.',
           repairFeedback
@@ -256,29 +456,63 @@ async function generateDecorationCandidates(
             type: 'json_schema',
             name: 'cookie_decoration_candidates',
             strict: true,
-            schema: AI_DECORATION_RESULT_SCHEMA
+            schema: createAIDecorationResultSchema(recognitionPlan)
           }
         }
-      })
+      }, { signal })
       if (response.usage) {
         inputTokens += response.usage.input_tokens
         outputTokens += response.usage.output_tokens
         totalTokens += response.usage.total_tokens
       }
       if (!response.output_text) throw new Error('OpenAI returned no structured decoration output')
-      const result = validateAIDecorationModelResult(JSON.parse(response.output_text))
-      const assessments = result.candidates.map((candidate) => evaluateDecorationSemantics(description, candidate))
+      const result = validateAIDecorationModelResult(JSON.parse(response.output_text), recognitionPlan)
+      const assessments = result.candidates.map((candidate) => (
+        evaluateDecorationSemantics(description, candidate, recognitionPlan)
+      ))
       if (assessments.every((assessment) => assessment.disposition === 'reject')) {
-        const issueCodes = [...new Set(assessments.flatMap((assessment) => (
-          assessment.findings.filter((finding) => finding.severity === 'error').map((finding) => finding.code)
-        )))].slice(0, 8)
-        throw new Error(`All decoration candidates failed subject recognition: ${issueCodes.join(', ')}`)
+        const issues = assessments.flatMap((assessment) => (
+          assessment.findings
+            .filter((finding) => finding.severity === 'error')
+            .map((finding) => `${finding.code}: ${finding.message}`)
+        )).slice(0, 8)
+        throw new Error(`All decoration candidates failed the frozen recognition plan: ${issues.join(' | ')}`)
+      }
+      const visualResult = await evaluateDecorationCandidatesVisually(
+        openai,
+        visualModel,
+        description,
+        recognitionPlan,
+        result.candidates,
+        outline,
+        safetyIdentifier,
+        signal
+      )
+      inputTokens += visualResult.usage?.inputTokens ?? 0
+      outputTokens += visualResult.usage?.outputTokens ?? 0
+      totalTokens += visualResult.usage?.totalTokens ?? 0
+      const visuallyPassedIds = new Set(
+        visualResult.evaluation.assessments
+          .filter((assessment) => assessment.passed)
+          .map((assessment) => assessment.candidateId)
+      )
+      const hasPublishableCandidate = result.candidates.some((candidate, index) => (
+        assessments[index].disposition !== 'reject' && visuallyPassedIds.has(candidate.id)
+      ))
+      if (!hasPublishableCandidate) {
+        const visualFeedback = visualResult.evaluation.assessments
+          .map((assessment) => `${assessment.candidateId}: ${assessment.repairFeedback}`)
+          .slice(0, 3)
+          .join(' | ')
+        throw new Error(`No candidate passed independent visual recognition: ${visualFeedback}`)
       }
       return {
         generationId,
         model,
         createdAt,
         candidates: result.candidates,
+        recognitionPlan,
+        visualEvaluation: visualResult.evaluation,
         usage: totalTokens ? { inputTokens, outputTokens, totalTokens } : undefined
       }
     } catch (error) {
@@ -340,10 +574,17 @@ export async function POST(request: Request) {
   const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini'
   const imageModel = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2'
   const decorationModel = process.env.OPENAI_DECORATION_MODEL || model
+  const decorationVisionModel = process.env.OPENAI_DECORATION_VISION_MODEL || decorationModel
   const subjectHint = getSubjectHint(description)
 
+  const deadlineController = new AbortController()
+  const deadlineTimer = setTimeout(() => deadlineController.abort(), OPENAI_ROUTE_DEADLINE_MS)
   try {
-    const openai = new OpenAI({ apiKey })
+    const openai = new OpenAI({
+      apiKey,
+      timeout: OPENAI_CALL_TIMEOUT_MS,
+      maxRetries: 0,
+    })
     let lastError: unknown
     let shape: ShapeResponse | undefined
     let generator = 'structured-vector'
@@ -363,7 +604,7 @@ export async function POST(request: Request) {
           'Keep limbs, stems, antennae, and other narrow connections thick and keep inward notches broad and shallow.',
           'Leave generous white margin on every side. Crisp flat vector-icon edges.'
         ].join(' ')
-      })
+      }, { signal: deadlineController.signal })
       const encodedImage = result.data?.[0]?.b64_json
       if (!encodedImage) throw new Error('OpenAI returned no silhouette image')
 
@@ -433,7 +674,7 @@ export async function POST(request: Request) {
               schema: shapeSchema
             }
           }
-        })
+        }, { signal: deadlineController.signal })
 
         if (!response.output_text) {
           throw new Error('OpenAI returned no structured output')
@@ -450,12 +691,23 @@ export async function POST(request: Request) {
     let decorationGeneration: AIDecorationGeneration | undefined
     let decorationWarning: string | undefined
     try {
+      const recognitionPlanResult = await generateRecognitionPlan(
+        openai,
+        decorationModel,
+        description,
+        shape,
+        safetyIdentifier,
+        deadlineController.signal
+      )
       decorationGeneration = await generateDecorationCandidates(
         openai,
         decorationModel,
         description,
         shape,
-        safetyIdentifier
+        safetyIdentifier,
+        recognitionPlanResult,
+        decorationVisionModel,
+        deadlineController.signal
       )
     } catch (error) {
       decorationWarning = 'The cutter was generated, but high-fidelity decoration planning fell back to the local planner.'
@@ -475,6 +727,8 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('OpenAI shape generation failed', error)
     return Response.json({ error: 'AI generation failed. Please try again.' }, { status: 502 })
+  } finally {
+    clearTimeout(deadlineTimer)
   }
 }
 

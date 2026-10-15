@@ -329,6 +329,60 @@ test('strict decoration parser rejects the polygon shape that caused the product
   )
 })
 
+test('decoration parser reconciles a close semantic geometry id instead of discarding every candidate', () => {
+  const candidates = [goodBarn('repair-1'), goodBarn('repair-2'), goodBarn('repair-3')]
+  const flowerFeature = candidates[0].semanticFeatures.find((feature) => feature.id.endsWith('feature-flower'))!
+  flowerFeature.geometryIds = ['stroke-repair-1-flower']
+
+  const parsed = validateAIDecorationModelResult({ candidates })
+  const repairedFeature = parsed.candidates[0].semanticFeatures
+    .find((feature) => feature.id.endsWith('feature-flower'))!
+  assert.deepEqual(repairedFeature.geometryIds, ['repair-1-flower'])
+})
+
+test('decoration parser assigns an otherwise unbound extra detail without weakening geometry validation', () => {
+  const candidates = [goodBarn('unbound-1'), goodBarn('unbound-2'), goodBarn('unbound-3')]
+  candidates[0].semanticFeatures = candidates[0].semanticFeatures
+    .filter((feature) => !feature.id.endsWith('feature-flower'))
+
+  const parsed = validateAIDecorationModelResult({ candidates })
+  const boundIds = new Set(parsed.candidates[0].semanticFeatures.flatMap((feature) => feature.geometryIds))
+  assert.ok(boundIds.has('unbound-1-flower'))
+  assert.ok(parsed.candidates[0].semanticFeatures.some((feature) => feature.id.startsWith('auto-')))
+})
+
+test('decoration parser rejects an ambiguous guessed binding', () => {
+  const candidates = [goodBarn('ambiguous-1'), goodBarn('ambiguous-2'), goodBarn('ambiguous-3')]
+  const braces = candidates[0].semanticFeatures.find((feature) => feature.id.endsWith('feature-braces'))!
+  braces.geometryIds = ['ambiguous-1-brace']
+
+  assert.throws(
+    () => validateAIDecorationModelResult({ candidates }),
+    /could not resolve geometry/
+  )
+})
+
+test('decoration parser rejects unmatched extra geometry when all feature slots are occupied', () => {
+  const candidates = [goodBarn('full-1'), goodBarn('full-2'), goodBarn('full-3')]
+  candidates[0].semanticFeatures = candidates[0].semanticFeatures
+    .filter((feature) => !feature.id.endsWith('feature-flower'))
+  ;['one', 'two', 'three', 'four'].forEach((suffix, index) => {
+    candidates[0].semanticFeatures.push({
+      id: `full-1-extra-${suffix}`,
+      name: `Unrelated ornament ${suffix}`,
+      description: 'An already-bound supporting label that does not describe the loose flower geometry.',
+      role: 'supporting',
+      geometryIds: [candidates[0].regions[index % 2].id],
+    })
+  })
+
+  assert.equal(candidates[0].semanticFeatures.length, 8)
+  assert.throws(
+    () => validateAIDecorationModelResult({ candidates }),
+    /leaves geometry unbound/
+  )
+})
+
 test('semantic fidelity outranks a physically simple but unrelated barn decoration', () => {
   const outline = {
     type: 'test-barn',
@@ -357,6 +411,7 @@ test('semantic fidelity outranks a physically simple but unrelated barn decorati
   const project = createAIEnhancedCookieProject(design, generation, {
     prompt: 'cute barn themed cookie',
     title: 'Barn themed cookie',
+    allowUnverifiedLegacy: true,
   })
 
   assert.equal(project.metadata?.selectedCandidateId, 'barn-good')
@@ -383,7 +438,10 @@ test('a fully rejected AI candidate set cannot be published as a matched project
   }
 
   assert.throws(
-    () => createAIEnhancedCookieProject(design, generation, { prompt: 'cute barn themed cookie' }),
+    () => createAIEnhancedCookieProject(design, generation, {
+      prompt: 'cute barn themed cookie',
+      allowUnverifiedLegacy: true,
+    }),
     /No AI decoration candidate passed/
   )
 })
