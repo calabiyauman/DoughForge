@@ -132,6 +132,7 @@ function cameraCandidate(id: string): AIDecorationCandidateDraft {
         technique: 'flood',
         layer: 1,
         landmarkId: 'camera-body',
+        landmarkInstance: 1,
       },
       {
         id: `${id}-lens`,
@@ -146,6 +147,7 @@ function cameraCandidate(id: string): AIDecorationCandidateDraft {
         technique: 'flood',
         layer: 2,
         landmarkId: 'camera-lens',
+        landmarkInstance: 1,
       },
     ],
     strokes: [
@@ -159,6 +161,7 @@ function cameraCandidate(id: string): AIDecorationCandidateDraft {
         technique: 'piped-detail',
         layer: 3,
         landmarkId: 'top-controls',
+        landmarkInstance: 1,
       },
       {
         id: `${id}-shine`,
@@ -170,6 +173,7 @@ function cameraCandidate(id: string): AIDecorationCandidateDraft {
         technique: 'piped-detail',
         layer: 3,
         landmarkId: 'lens-shine',
+        landmarkInstance: 1,
       },
     ],
     lettering: [],
@@ -268,6 +272,7 @@ function wordmarkCandidate(text: string): AIDecorationCandidateDraft {
         technique: 'piped-detail',
         layer: 2,
         landmarkId: 'script-flourish',
+        landmarkInstance: 1,
       },
       {
         id: 'wordmark-sparkle',
@@ -279,6 +284,7 @@ function wordmarkCandidate(text: string): AIDecorationCandidateDraft {
         technique: 'piped-detail',
         layer: 2,
         landmarkId: 'sparkle-accent',
+        landmarkInstance: 1,
       },
     ],
     lettering: [{
@@ -296,6 +302,7 @@ function wordmarkCandidate(text: string): AIDecorationCandidateDraft {
       rotationDegrees: 0,
       layer: 3,
       landmarkId: 'barbie-wordmark',
+      landmarkInstance: 1,
     }],
     semanticFeatures: [],
   }
@@ -340,6 +347,7 @@ test('generic or wrong-layout geometry cannot self-certify with convincing label
 test('dynamic candidate schema requires direct bindings to frozen landmark ids', () => {
   const schemaText = JSON.stringify(createAIDecorationResultSchema(cameraPlan()))
   assert.match(schemaText, /landmarkId/)
+  assert.match(schemaText, /landmarkInstance/)
   assert.match(schemaText, /camera-lens/)
   assert.doesNotMatch(schemaText, /semanticFeatures/)
 
@@ -458,6 +466,7 @@ test('exact landmark counts reject extra geometry instead of accepting at least 
   const lens = structuredClone(candidate.regions.find((region) => region.landmarkId === 'camera-lens')!)
   lens.id = 'camera-extra-lens-second-lens'
   lens.centerX = 0.64
+  lens.landmarkInstance = 2
   candidate.regions.push(lens)
 
   const assessment = evaluateDecorationSemantics('cute camera cookie', candidate, plan)
@@ -465,6 +474,63 @@ test('exact landmark counts reject extra geometry instead of accepting at least 
   assert.ok(assessment.findings.some((finding) => (
     finding.code === 'landmark_instance_count_mismatch'
     && /exactly 1.*found 2/.test(finding.message)
+  )))
+})
+
+test('multiple icing primitives can form one conceptual landmark instance', () => {
+  const plan = cameraPlan()
+  const candidate = cameraCandidate('camera-compound-lens')
+  candidate.strokes.push({
+    id: 'camera-compound-lens-ring',
+    name: 'Lens ring detail',
+    points: [
+      { x: 0.36, y: 0.45 },
+      { x: 0.5, y: 0.59 },
+      { x: 0.64, y: 0.45 },
+      { x: 0.5, y: 0.31 },
+      { x: 0.36, y: 0.45 },
+    ],
+    widthMm: 1.4,
+    colorSlot: 'outline',
+    closed: true,
+    technique: 'piped-detail',
+    layer: 3,
+    landmarkId: 'camera-lens',
+    landmarkInstance: 1,
+  })
+
+  const parsed = validateAIDecorationModelResult({
+    candidates: [candidate, cameraCandidate('camera-compound-2'), cameraCandidate('camera-compound-3')],
+  }, plan)
+  const assessment = evaluateDecorationSemantics('cute camera cookie', parsed.candidates[0], plan)
+
+  assert.equal(assessment.disposition, 'eligible')
+  assert.ok(!assessment.findings.some((finding) => finding.code === 'landmark_instance_count_mismatch'))
+})
+
+test('a pair is evaluated relative to its planned zone instead of forced across the canvas', () => {
+  const plan = cameraPlan()
+  const controls = plan.landmarks.find((landmark) => landmark.id === 'top-controls')!
+  controls.zone = 'upper-left'
+  controls.distribution = 'horizontal-pair'
+  controls.minimumInstances = 2
+  controls.maximumInstances = 2
+  const candidate = cameraCandidate('camera-local-pair')
+  const first = candidate.strokes.find((stroke) => stroke.landmarkId === 'top-controls')!
+  first.points = [{ x: 0.16, y: 0.8 }, { x: 0.24, y: 0.8 }]
+  candidate.strokes.push({
+    ...structuredClone(first),
+    id: 'camera-local-pair-second-control',
+    name: 'Second top control',
+    points: [{ x: 0.32, y: 0.8 }, { x: 0.4, y: 0.8 }],
+    landmarkInstance: 2,
+  })
+
+  const assessment = evaluateDecorationSemantics('cute camera cookie', candidate, plan)
+
+  assert.equal(assessment.disposition, 'eligible')
+  assert.ok(!assessment.findings.some((finding) => (
+    finding.code === 'landmark_distribution_mismatch' || finding.code === 'landmark_zone_mismatch'
   )))
 })
 

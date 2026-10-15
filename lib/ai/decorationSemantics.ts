@@ -29,6 +29,7 @@ interface PrimitiveGeometry {
   kind: 'ellipse' | 'polygon' | 'stroke' | 'lettering'
   points: AINormalizedPoint[]
   landmarkId?: string
+  landmarkInstance?: number
   text?: string
 }
 
@@ -168,10 +169,22 @@ function geometryMap(candidate: AIDecorationCandidateDraft): Map<string, Primiti
           { x: region.centerX, y: region.centerY - region.radiusY },
         ]
       : region.points
-    result.set(region.id, { id: region.id, kind: region.kind, points, landmarkId: region.landmarkId })
+    result.set(region.id, {
+      id: region.id,
+      kind: region.kind,
+      points,
+      landmarkId: region.landmarkId,
+      landmarkInstance: region.landmarkInstance,
+    })
   })
   candidate.strokes.forEach((stroke) => {
-    result.set(stroke.id, { id: stroke.id, kind: 'stroke', points: stroke.points, landmarkId: stroke.landmarkId })
+    result.set(stroke.id, {
+      id: stroke.id,
+      kind: 'stroke',
+      points: stroke.points,
+      landmarkId: stroke.landmarkId,
+      landmarkInstance: stroke.landmarkInstance,
+    })
   })
   candidate.lettering.forEach((lettering) => {
     const halfWidth = lettering.maxWidthRatio / 2
@@ -180,6 +193,7 @@ function geometryMap(candidate: AIDecorationCandidateDraft): Map<string, Primiti
       id: lettering.id,
       kind: 'lettering',
       landmarkId: lettering.landmarkId,
+      landmarkInstance: lettering.landmarkInstance,
       text: lettering.text,
       points: [
         { x: lettering.position.x - halfWidth, y: lettering.position.y - halfHeight },
@@ -568,6 +582,21 @@ function primitivesForLandmark(
   return [...geometry.values()].filter((primitive) => primitive.landmarkId === landmarkId)
 }
 
+function landmarkInstanceGroups(
+  primitives: readonly PrimitiveGeometry[]
+): PrimitiveGeometry[][] {
+  const groups = new Map<number, PrimitiveGeometry[]>()
+  primitives.forEach((primitive, index) => {
+    const instance = primitive.landmarkInstance ?? index + 1
+    const group = groups.get(instance) ?? []
+    group.push(primitive)
+    groups.set(instance, group)
+  })
+  return [...groups.entries()]
+    .sort(([first], [second]) => first - second)
+    .map(([, group]) => group)
+}
+
 function landmarkSeverity(landmark: AIRecognitionLandmark): 'warning' | 'error' {
   return landmark.required || landmark.role === 'signature' || Boolean(landmark.requiredText)
     ? 'error'
@@ -604,53 +633,49 @@ function zoneContains(
 
 function distributionMatches(
   landmark: AIRecognitionLandmark,
-  primitives: readonly PrimitiveGeometry[]
+  instanceGroups: readonly PrimitiveGeometry[][]
 ): boolean {
   if (landmark.distribution === 'free' || landmark.distribution === 'single') return true
-  const primitiveBounds = primitives
-    .map((primitive) => bounds([primitive]))
+  const instanceBounds = instanceGroups
+    .map((group) => bounds(group))
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
   if (landmark.distribution === 'horizontal-pair') {
-    return primitiveBounds.length >= 2
-      && primitiveBounds.some((item) => item.centerX <= 0.45)
-      && primitiveBounds.some((item) => item.centerX >= 0.55)
-      && Math.max(...primitiveBounds.map((item) => item.centerY))
-        - Math.min(...primitiveBounds.map((item) => item.centerY)) <= 0.24
+    return instanceBounds.length === 2
+      && Math.abs(instanceBounds[0].centerX - instanceBounds[1].centerX) >= 0.08
+      && Math.abs(instanceBounds[0].centerY - instanceBounds[1].centerY) <= 0.24
   }
   if (landmark.distribution === 'vertical-pair') {
-    return primitiveBounds.length >= 2
-      && primitiveBounds.some((item) => item.centerY <= 0.45)
-      && primitiveBounds.some((item) => item.centerY >= 0.55)
-      && Math.max(...primitiveBounds.map((item) => item.centerX))
-        - Math.min(...primitiveBounds.map((item) => item.centerX)) <= 0.24
+    return instanceBounds.length === 2
+      && Math.abs(instanceBounds[0].centerY - instanceBounds[1].centerY) >= 0.08
+      && Math.abs(instanceBounds[0].centerX - instanceBounds[1].centerX) <= 0.24
   }
   if (landmark.distribution === 'horizontal-row') {
-    const xSpan = Math.max(...primitiveBounds.map((item) => item.centerX))
-      - Math.min(...primitiveBounds.map((item) => item.centerX))
-    const ySpan = Math.max(...primitiveBounds.map((item) => item.centerY))
-      - Math.min(...primitiveBounds.map((item) => item.centerY))
-    return primitiveBounds.length >= 2 && xSpan >= 0.18 && ySpan <= 0.24
+    const xSpan = Math.max(...instanceBounds.map((item) => item.centerX))
+      - Math.min(...instanceBounds.map((item) => item.centerX))
+    const ySpan = Math.max(...instanceBounds.map((item) => item.centerY))
+      - Math.min(...instanceBounds.map((item) => item.centerY))
+    return instanceBounds.length >= 2 && xSpan >= 0.18 && ySpan <= 0.24
   }
   if (landmark.distribution === 'vertical-stack') {
-    const xSpan = Math.max(...primitiveBounds.map((item) => item.centerX))
-      - Math.min(...primitiveBounds.map((item) => item.centerX))
-    const ySpan = Math.max(...primitiveBounds.map((item) => item.centerY))
-      - Math.min(...primitiveBounds.map((item) => item.centerY))
-    return primitiveBounds.length >= 2 && ySpan >= 0.18 && xSpan <= 0.24
+    const xSpan = Math.max(...instanceBounds.map((item) => item.centerX))
+      - Math.min(...instanceBounds.map((item) => item.centerX))
+    const ySpan = Math.max(...instanceBounds.map((item) => item.centerY))
+      - Math.min(...instanceBounds.map((item) => item.centerY))
+    return instanceBounds.length >= 2 && ySpan >= 0.18 && xSpan <= 0.24
   }
   if (landmark.distribution === 'cluster') {
-    const xSpan = Math.max(...primitiveBounds.map((item) => item.centerX))
-      - Math.min(...primitiveBounds.map((item) => item.centerX))
-    const ySpan = Math.max(...primitiveBounds.map((item) => item.centerY))
-      - Math.min(...primitiveBounds.map((item) => item.centerY))
-    return primitiveBounds.length >= 2 && Math.max(xSpan, ySpan) >= 0.08
+    const xSpan = Math.max(...instanceBounds.map((item) => item.centerX))
+      - Math.min(...instanceBounds.map((item) => item.centerX))
+    const ySpan = Math.max(...instanceBounds.map((item) => item.centerY))
+      - Math.min(...instanceBounds.map((item) => item.centerY))
+    return instanceBounds.length >= 2 && Math.max(xSpan, ySpan) >= 0.08
   }
   if (landmark.distribution === 'radial') {
-    if (primitiveBounds.length < 3) return false
-    const xSpan = Math.max(...primitiveBounds.map((item) => item.centerX))
-      - Math.min(...primitiveBounds.map((item) => item.centerX))
-    const ySpan = Math.max(...primitiveBounds.map((item) => item.centerY))
-      - Math.min(...primitiveBounds.map((item) => item.centerY))
+    if (instanceBounds.length < 3) return false
+    const xSpan = Math.max(...instanceBounds.map((item) => item.centerX))
+      - Math.min(...instanceBounds.map((item) => item.centerX))
+    const ySpan = Math.max(...instanceBounds.map((item) => item.centerY))
+      - Math.min(...instanceBounds.map((item) => item.centerY))
     return xSpan >= 0.18 && ySpan >= 0.18
   }
   return true
@@ -782,11 +807,12 @@ function recognitionPlanFindings(
       return
     }
     coveredFeatureIds.push(landmark.id)
+    const instanceGroups = landmarkInstanceGroups(primitives)
     const primitiveBounds = bounds(primitives)
     const severity = landmarkSeverity(landmark)
     if (
-      primitives.length < landmark.minimumInstances
-      || primitives.length > landmark.maximumInstances
+      instanceGroups.length < landmark.minimumInstances
+      || instanceGroups.length > landmark.maximumInstances
     ) {
       const requiredCount = landmark.minimumInstances === landmark.maximumInstances
         ? `exactly ${landmark.minimumInstances}`
@@ -794,7 +820,7 @@ function recognitionPlanFindings(
       findings.push({
         code: 'landmark_instance_count_mismatch',
         severity,
-        message: `${landmark.name} requires ${requiredCount} distinct visible icing elements; found ${primitives.length}.`,
+        message: `${landmark.name} requires ${requiredCount} distinct visible instances; found ${instanceGroups.length}.`,
         featureIds: [landmark.id],
       })
     }
@@ -826,7 +852,7 @@ function recognitionPlanFindings(
         featureIds: [landmark.id],
       })
     }
-    if (!distributionMatches(landmark, primitives)) {
+    if (!distributionMatches(landmark, instanceGroups)) {
       findings.push({
         code: 'landmark_distribution_mismatch',
         severity,

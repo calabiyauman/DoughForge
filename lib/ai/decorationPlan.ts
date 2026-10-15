@@ -41,6 +41,7 @@ export interface AIDecorationRegionDraft {
   technique: AIDecorationTechnique
   layer: number
   landmarkId?: string
+  landmarkInstance?: number
 }
 
 export interface AIDecorationStrokeDraft {
@@ -53,6 +54,7 @@ export interface AIDecorationStrokeDraft {
   technique: 'wet-on-wet' | 'piped-detail'
   layer: number
   landmarkId?: string
+  landmarkInstance?: number
 }
 
 export interface AIDecorationLetteringDraft {
@@ -70,6 +72,7 @@ export interface AIDecorationLetteringDraft {
   rotationDegrees: number
   layer: number
   landmarkId?: string
+  landmarkInstance?: number
 }
 
 export interface AISemanticFeatureBinding {
@@ -310,7 +313,12 @@ export function createAIDecorationResultSchema(
       type: 'string',
       enum: landmarkIds,
     }
-    collection.items.required.push('landmarkId')
+    collection.items.properties.landmarkInstance = {
+      type: 'integer',
+      minimum: 1,
+      maximum: 12,
+    }
+    collection.items.required.push('landmarkId', 'landmarkInstance')
   }
 
   return schema as unknown as Record<string, unknown>
@@ -454,6 +462,10 @@ export function validateAIDecorationModelResult(
     }
     return parsed
   }
+  const landmarkInstance = (rawValue: unknown, path: string): number | undefined => {
+    if (!recognitionPlan && rawValue === undefined) return undefined
+    return assertInteger(rawValue, path, 1, 12)
+  }
   const candidates = assertArray(value.candidates, 'candidates', 3, 3).map((rawCandidate, candidateIndex) => {
     const path = `candidates[${candidateIndex}]`
     if (!isRecord(rawCandidate)) throw new Error(`${path} must be an object`)
@@ -488,6 +500,7 @@ export function validateAIDecorationModelResult(
         technique: assertEnum(rawRegion.technique, AI_DECORATION_TECHNIQUES, `${regionPath}.technique`),
         layer: assertInteger(rawRegion.layer, `${regionPath}.layer`, 0, 5),
         landmarkId: landmarkId(rawRegion.landmarkId, `${regionPath}.landmarkId`),
+        landmarkInstance: landmarkInstance(rawRegion.landmarkInstance, `${regionPath}.landmarkInstance`),
       }
     })
 
@@ -505,6 +518,7 @@ export function validateAIDecorationModelResult(
         technique: assertEnum(rawStroke.technique, ['wet-on-wet', 'piped-detail'] as const, `${strokePath}.technique`),
         layer: assertInteger(rawStroke.layer, `${strokePath}.layer`, 0, 5),
         landmarkId: landmarkId(rawStroke.landmarkId, `${strokePath}.landmarkId`),
+        landmarkInstance: landmarkInstance(rawStroke.landmarkInstance, `${strokePath}.landmarkInstance`),
       }
     })
 
@@ -530,6 +544,7 @@ export function validateAIDecorationModelResult(
         rotationDegrees: assertNumber(rawLettering.rotationDegrees, `${letteringPath}.rotationDegrees`, -30, 30),
         layer: assertInteger(rawLettering.layer, `${letteringPath}.layer`, 0, 5),
         landmarkId: landmarkId(rawLettering.landmarkId, `${letteringPath}.landmarkId`),
+        landmarkInstance: landmarkInstance(rawLettering.landmarkInstance, `${letteringPath}.landmarkInstance`),
       }
     })
 
@@ -538,6 +553,20 @@ export function validateAIDecorationModelResult(
     uniqueIds(lettering, `${path}.lettering`)
     const geometry = [...regions, ...strokes, ...lettering]
     uniqueIds(geometry, `${path}.geometry`)
+    if (recognitionPlan) {
+      recognitionPlan.landmarks.forEach((landmark) => {
+        const instances = [...new Set(geometry
+          .filter((item) => item.landmarkId === landmark.id)
+          .map((item) => item.landmarkInstance))]
+          .filter((instance): instance is number => instance !== undefined)
+          .sort((first, second) => first - second)
+        instances.forEach((instance, index) => {
+          if (instance !== index + 1 || instance > landmark.maximumInstances) {
+            throw new Error(`${path} must number ${landmark.id} instances consecutively from 1 through ${landmark.maximumInstances}`)
+          }
+        })
+      })
+    }
     const geometryIds = new Set(geometry.map((item) => item.id))
     let semanticFeatures: AISemanticFeatureBinding[]
     if (recognitionPlan) {

@@ -382,6 +382,7 @@ function candidateParts(
         layer: region.layer,
         aiSourceId: region.id,
         ...(region.landmarkId ? { landmarkId: region.landmarkId } : {}),
+        ...(region.landmarkInstance ? { landmarkInstance: region.landmarkInstance } : {}),
       },
     })
   })
@@ -403,6 +404,7 @@ function candidateParts(
       layer: stroke.layer,
       aiSourceId: stroke.id,
       ...(stroke.landmarkId ? { landmarkId: stroke.landmarkId } : {}),
+      ...(stroke.landmarkInstance ? { landmarkInstance: stroke.landmarkInstance } : {}),
     },
   }))
 
@@ -424,6 +426,7 @@ function candidateParts(
       layer: item.layer,
       aiSourceId: item.id,
       ...(item.landmarkId ? { landmarkId: item.landmarkId } : {}),
+      ...(item.landmarkInstance ? { landmarkInstance: item.landmarkInstance } : {}),
     },
   }))
   const registeredCandidate: AIDecorationCandidateDraft = {
