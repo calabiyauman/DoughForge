@@ -250,7 +250,7 @@ async function generateRecognitionPlan(
           'The normalized canvas uses x=0..1 left-to-right and y=0..1 bottom-to-top.',
           'Give every landmark a truthful concrete zone, visible span, primitive kind, minimum instance count, maximum instance count, and distribution.',
           'For an exact requested count, set minimumInstances and maximumInstances to that same count. A single item must be 1 and 1; a pair must be 2 and 2.',
-          'Use horizontal-pair for exactly two left/right features, vertical-pair for exactly two stacked features, horizontal-row or vertical-stack for repeated subjects in a line, cluster for a grouped set, and radial only for three or more elements surrounding a center.',
+          'Use horizontal-pair for exactly two side-by-side left/right features, including double doors, paired eyes, wheels, and windows. Use vertical-pair only for two explicitly stacked top/bottom features. State side-by-side or stacked direction plainly in the landmark name or description. Use horizontal-row or vertical-stack for repeated subjects in a line, cluster for a grouped set, and radial only for three or more elements surrounding a center.',
           'Use requiredText only for exact visible words requested by the customer; otherwise return an empty string.',
           'Add one or more testable spatial relationships. Required relationships must be essential to recognizing the requested layout.',
           'Use crosses only for two genuinely intersecting line landmarks, mirrors for distinct bilateral landmarks, and inside only when one feature is visibly enclosed by another.',

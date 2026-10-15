@@ -710,11 +710,25 @@ function relationMatches(
   const from = bounds(fromPrimitives)
   const to = bounds(toPrimitives)
   if (!from || !to) return false
+  const fromInstances = landmarkInstanceGroups(fromPrimitives)
+    .map((group) => bounds(group))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+  const toInstances = landmarkInstanceGroups(toPrimitives)
+    .map((group) => bounds(group))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+  const anyInstancePair = (
+    predicate: (
+      fromInstance: NonNullable<ReturnType<typeof bounds>>,
+      toInstance: NonNullable<ReturnType<typeof bounds>>
+    ) => boolean
+  ) => fromInstances.some((fromInstance) => (
+    toInstances.some((toInstance) => predicate(fromInstance, toInstance))
+  ))
   switch (relationship.relation) {
-    case 'above': return from.centerY >= to.centerY + 0.06
-    case 'below': return from.centerY <= to.centerY - 0.06
-    case 'left-of': return from.centerX <= to.centerX - 0.06
-    case 'right-of': return from.centerX >= to.centerX + 0.06
+    case 'above': return anyInstancePair((first, second) => first.centerY >= second.centerY + 0.06)
+    case 'below': return anyInstancePair((first, second) => first.centerY <= second.centerY - 0.06)
+    case 'left-of': return anyInstancePair((first, second) => first.centerX <= second.centerX - 0.06)
+    case 'right-of': return anyInstancePair((first, second) => first.centerX >= second.centerX + 0.06)
     case 'inside': return (
       from.minX >= to.minX - 0.03
       && from.maxX <= to.maxX + 0.03
@@ -834,8 +848,8 @@ function recognitionPlanFindings(
     }
     if (
       !primitiveBounds
-      || primitiveBounds.width + 0.01 < landmark.minimumWidthRatio
-      || primitiveBounds.height + 0.01 < landmark.minimumHeightRatio
+      || primitiveBounds.width + 0.04 < landmark.minimumWidthRatio
+      || primitiveBounds.height + 0.04 < landmark.minimumHeightRatio
     ) {
       findings.push({
         code: 'landmark_scale_mismatch',

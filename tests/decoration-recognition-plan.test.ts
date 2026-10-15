@@ -534,6 +534,35 @@ test('a pair is evaluated relative to its planned zone instead of forced across 
   )))
 })
 
+test('directional relationships can address different conceptual instances in a pair', () => {
+  const plan = cameraPlan()
+  const controls = plan.landmarks.find((landmark) => landmark.id === 'top-controls')!
+  controls.distribution = 'horizontal-pair'
+  controls.minimumInstances = 2
+  controls.maximumInstances = 2
+  const candidate = cameraCandidate('camera-directional-pair')
+  const first = candidate.strokes.find((stroke) => stroke.landmarkId === 'top-controls')!
+  first.points = [{ x: 0.16, y: 0.8 }, { x: 0.24, y: 0.8 }]
+  candidate.strokes.push({
+    ...structuredClone(first),
+    id: 'camera-directional-pair-second-control',
+    name: 'Right top control',
+    points: [{ x: 0.76, y: 0.8 }, { x: 0.84, y: 0.8 }],
+    landmarkInstance: 2,
+  })
+  plan.relationships = [
+    { fromLandmarkId: 'camera-lens', toLandmarkId: 'camera-body', relation: 'inside', required: true },
+    { fromLandmarkId: 'top-controls', toLandmarkId: 'camera-lens', relation: 'left-of', required: true },
+    { fromLandmarkId: 'top-controls', toLandmarkId: 'camera-lens', relation: 'right-of', required: true },
+    { fromLandmarkId: 'lens-shine', toLandmarkId: 'camera-lens', relation: 'inside', required: false },
+  ]
+
+  const assessment = evaluateDecorationSemantics('cute camera cookie', candidate, plan)
+
+  assert.equal(assessment.disposition, 'eligible')
+  assert.ok(!assessment.findings.some((finding) => finding.code === 'landmark_relationship_mismatch'))
+})
+
 test('pair distributions require an exact pair in the frozen plan', () => {
   const invalidPair = structuredClone(cameraPlan())
   const controls = invalidPair.landmarks.find((landmark) => landmark.id === 'top-controls')!
@@ -544,6 +573,21 @@ test('pair distributions require an exact pair in the frozen plan', () => {
     () => validateAIRecognitionPlan(invalidPair, 'cute camera cookie'),
     /counts must agree/
   )
+
+  const ambiguousDirection = structuredClone(cameraPlan())
+  const ambiguousControls = ambiguousDirection.landmarks.find((landmark) => landmark.id === 'top-controls')!
+  ambiguousControls.distribution = 'vertical-pair'
+  ambiguousControls.minimumInstances = 2
+  ambiguousControls.maximumInstances = 2
+  ambiguousControls.description = 'Two paired shutter controls near the lens.'
+  assert.throws(
+    () => validateAIRecognitionPlan(ambiguousDirection, 'cute camera cookie'),
+    /explicit side-by-side or stacked description/
+  )
+
+  ambiguousControls.distribution = 'horizontal-pair'
+  ambiguousControls.description = 'Two side-by-side left and right shutter controls.'
+  assert.doesNotThrow(() => validateAIRecognitionPlan(ambiguousDirection, 'cute camera cookie'))
 })
 
 test('requested counts and visible wording must be encoded as enforceable requirements', () => {

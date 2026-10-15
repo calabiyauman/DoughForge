@@ -479,6 +479,19 @@ export function validateAIRecognitionPlan(
   if (invalidDistributions.length) {
     throw new Error(`recognitionPlan landmark counts must agree with their distribution: ${invalidDistributions.map((item) => item.id).join(', ')}`)
   }
+  const pairDirectionMismatch = landmarks.filter((landmark) => {
+    const description = ` ${landmark.name} ${landmark.description} `.toLowerCase()
+    if (landmark.distribution === 'horizontal-pair') {
+      return !/(?:\bside[ -]by[ -]side\b|\bhorizontal(?:ly)?\b|\bleft\b.{0,40}\bright\b|\bright\b.{0,40}\bleft\b)/.test(description)
+    }
+    if (landmark.distribution === 'vertical-pair') {
+      return !/(?:\bstacked\b|\bvertical(?:ly)?\b|\btop\b.{0,40}\bbottom\b|\bbottom\b.{0,40}\btop\b|\bupper\b.{0,40}\blower\b|\blower\b.{0,40}\bupper\b|\bone\b.{0,20}\b(?:above|below)\b)/.test(description)
+    }
+    return false
+  })
+  if (pairDirectionMismatch.length) {
+    throw new Error(`recognitionPlan pair distributions require an explicit side-by-side or stacked description: ${pairDirectionMismatch.map((item) => item.id).join(', ')}`)
+  }
   const invalidTextLandmarks = landmarks.filter((landmark) => (
     landmark.requiredText && (!landmark.required || landmark.geometryKind !== 'lettering')
   ))
