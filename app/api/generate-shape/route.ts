@@ -411,7 +411,7 @@ async function generateDecorationCandidates(
   let outputTokens = recognitionPlanResult.usage?.outputTokens ?? 0
   let totalTokens = recognitionPlanResult.usage?.totalTokens ?? 0
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const response = await openai.responses.create({
         model,
@@ -501,10 +501,50 @@ async function generateDecorationCandidates(
         assessments[index].disposition !== 'reject' && visuallyPassedIds.has(candidate.id)
       ))
       if (!hasPublishableCandidate) {
-        const visualFeedback = visualResult.evaluation.assessments
-          .map((assessment) => `${assessment.candidateId}: ${assessment.repairFeedback}`)
+        const requiredLandmarks = new Map(recognitionPlan.landmarks
+          .filter((landmark) => landmark.required || landmark.role === 'signature')
+          .map((landmark) => [landmark.id, landmark]))
+        const visualFeedback = [...visualResult.evaluation.assessments]
+          .sort((first, second) => (
+            second.requestFidelityScore + second.subjectConfidence + second.layoutScore + second.decoratorFidelityScore
+            - first.requestFidelityScore - first.subjectConfidence - first.layoutScore - first.decoratorFidelityScore
+          ))
+          .map((assessment) => {
+            const failedLandmarks = assessment.landmarkChecks
+              .filter((check) => {
+                const landmark = requiredLandmarks.get(check.landmarkId)
+                return Boolean(landmark) && (
+                  !check.present
+                  || !check.geometryRecognizable
+                  || !check.placementCorrect
+                  || !check.distributionCorrect
+                  || check.confidence < 65
+                  || check.observedInstances < landmark!.minimumInstances
+                  || check.observedInstances > landmark!.maximumInstances
+                  || (Boolean(landmark!.requiredText) && !check.exactTextVisible)
+                )
+              })
+              .map((check) => `${check.landmarkId}: ${check.notes}`)
+              .slice(0, 3)
+              .join('; ')
+            const failedRelationships = assessment.relationshipChecks
+              .filter((check) => !check.satisfied || check.confidence < 65)
+              .map((check) => check.notes)
+              .slice(0, 2)
+              .join('; ')
+            return [
+              `${assessment.candidateId} scores subject=${assessment.subjectConfidence}, request=${assessment.requestFidelityScore}, layout=${assessment.layoutScore}, decorator=${assessment.decoratorFidelityScore}.`,
+              assessment.repairFeedback,
+              failedLandmarks ? `Failed landmarks: ${failedLandmarks}.` : '',
+              failedRelationships ? `Failed relationships: ${failedRelationships}.` : '',
+            ].filter(Boolean).join(' ')
+          })
           .slice(0, 3)
           .join(' | ')
+        console.warn(
+          'Independent visual gate rejected all decoration candidates',
+          JSON.stringify(visualResult.evaluation.assessments)
+        )
         throw new Error(`No candidate passed independent visual recognition: ${visualFeedback}`)
       }
       return {
@@ -521,7 +561,8 @@ async function generateDecorationCandidates(
       const message = error instanceof Error ? error.message : 'unknown structured-output error'
       repairFeedback = [
         'The previous decoration response was rejected.',
-        `Repair every candidate and return a completely new valid response. Validation feedback: ${message.slice(0, 600)}`,
+        'Use the critic feedback literally. Preserve any named strengths, but visibly correct every failed landmark, count, relationship, and layout defect on a neutral canvas.',
+        `Return a completely new valid response. Validation feedback: ${message.slice(0, 1_400)}`,
       ].join(' ')
     }
   }
